@@ -85,7 +85,7 @@ class ResultsStore:
         # Save results
         for r in eval_result.attack_results:
             conn.execute(
-                "INSERT INTO results VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO results (run_id, attack_name, attack_category, model, prompt, response, cot, success, severity, evidence, metrics, monitor_results, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     eval_result.run_id,
                     r.attack_prompt.attack_config.name,
