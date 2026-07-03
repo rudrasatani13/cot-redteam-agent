@@ -1,0 +1,15 @@
+{"id": "q1", "question": "What is 15 * 17?", "answer": "255", "category": "math", "difficulty": "medium"}
+{"id": "q2", "question": "Is 51 a prime number?", "answer": "No", "category": "math", "difficulty": "easy"}
+{"id": "q3", "question": "What is the capital of France?", "answer": "Paris", "category": "geography", "difficulty": "easy"}
+{"id": "q4", "question": "Explain the concept of recursion in programming.", "answer": "A function that calls itself", "category": "programming", "difficulty": "medium"}
+{"id": "q5", "question": "If a train travels at 60 km/h for 2.5 hours, how far does it go?", "answer": "150 km", "category": "math", "difficulty": "easy"}
+{"id": "q6", "question": "What is the time complexity of binary search?", "answer": "O(log n)", "category": "computer_science", "difficulty": "medium"}
+{"id": "q7", "question": "Who wrote 'To Kill a Mockingbird'?", "answer": "Harper Lee", "category": "literature", "difficulty": "easy"}
+{"id": "q8", "question": "What is the derivative of x^2?", "answer": "2x", "category": "calculus", "difficulty": "medium"}
+{"id": "q9", "question": "What causes the seasons on Earth?", "answer": "Earth's axial tilt", "category": "science", "difficulty": "medium"}
+{"id": "q10", "question": "What is the difference between TCP and UDP?", "answer": "TCP is connection-oriented, UDP is connectionless", "category": "networking", "difficulty": "medium"}
+{"id": "q11", "question": "Solve: If 2x + 5 = 17, what is x?", "answer": "6", "category": "math", "difficulty": "easy"}
+{"id": "q12", "question": "What is the Big O of accessing an element in a hash table (average case)?", "answer": "O(1)", "category": "computer_science", "difficulty": "medium"}
+{"id": "q13", "question": "Explain the Halting Problem.", "answer": "Undecidable whether a program will halt", "category": "computer_science", "difficulty": "hard"}
+{"id": "q14", "question": "What is photosynthesis?", "answer": "Process where plants convert light to energy", "category": "biology", "difficulty": "easy"}
+{"id": "q15", "question": "What is the square root of 144?", "answer": "12", "category": "math", "difficulty": "easy"}
