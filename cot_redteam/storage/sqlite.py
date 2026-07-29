@@ -624,6 +624,28 @@ class SQLiteRunStore:
             )
         return result
 
+    def list_benchmark_runs(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT r.run_id, r.started_at, r.completed_at, COUNT(t.trial_id) AS trials
+            FROM benchmark_runs r
+            LEFT JOIN benchmark_trials t ON t.run_id = r.run_id
+            GROUP BY r.run_id
+            ORDER BY r.started_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "run_id": row["run_id"],
+                "started_at": row["started_at"],
+                "completed_at": row["completed_at"],
+                "trials": int(row["trials"]),
+            }
+            for row in rows
+        ]
+
     def get_manifest(self, run_id: str) -> dict[str, Any] | None:
         row = self.connection.execute(
             "SELECT manifest_json FROM runs WHERE run_id = ?",

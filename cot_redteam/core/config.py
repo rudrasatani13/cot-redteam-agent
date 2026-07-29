@@ -407,6 +407,11 @@ def validate_config(
             context,
         )
 
+    if config.evaluation.suite_ids or config.evaluation.suite_paths:
+        from cot_redteam.benchmark.validation import validate_benchmark_config
+
+        validate_benchmark_config(config)
+
     # Dataset accessibility (no provider network calls).
     Dataset.load_jsonl(config.evaluation.dataset_path)
 

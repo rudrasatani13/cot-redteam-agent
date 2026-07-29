@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +25,29 @@ class ScenarioSuite:
     scenarios: tuple[ScenarioSpec, ...]
     digest: str
     path: str
+
+    @classmethod
+    def from_scenarios(
+        cls,
+        scenarios: Sequence[ScenarioSpec],
+        *,
+        suite_id: str,
+        path: str,
+    ) -> ScenarioSuite:
+        suite_id = suite_id.strip()
+        if not _SUITE_ID.fullmatch(suite_id):
+            raise DatasetError("suite_id must be a lowercase stable identifier")
+        values = tuple(scenarios)
+        if not values:
+            raise DatasetError("scenario suite is empty")
+        if len({scenario.id for scenario in values}) != len(values):
+            raise DatasetError("scenario suite contains duplicate scenario ids")
+        if len({scenario.content_digest for scenario in values}) != len(values):
+            raise DatasetError("scenario suite contains duplicate scenario content")
+        digest = sha256_text(
+            "\n".join(canonical_json(scenario.model_dump(mode="python")) for scenario in values)
+        )
+        return cls(id=suite_id, scenarios=values, digest=digest, path=path)
 
     @classmethod
     def load_jsonl(cls, path: str | Path, *, suite_id: str) -> ScenarioSuite:
@@ -75,12 +99,8 @@ class ScenarioSuite:
 
         if not scenarios:
             raise DatasetError(f"scenario suite is empty: {source}")
-        digest = sha256_text(
-            "\n".join(canonical_json(scenario.model_dump(mode="python")) for scenario in scenarios)
-        )
-        return cls(
-            id=suite_id,
-            scenarios=tuple(scenarios),
-            digest=digest,
+        return cls.from_scenarios(
+            scenarios,
+            suite_id=suite_id,
             path=str(source),
         )
