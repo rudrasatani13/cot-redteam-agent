@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 0.4.0 — 2026-07-30
+
+### Added
+
+- Adaptive educational attack `injection.system_canary_adaptive` with a
+  packaged multi-payload bank (`system_canary_bank.jsonl`)
+- Evaluation engine multi-attempt loop: try the next payload until real
+  disclosure succeeds or the bank is exhausted (`stop_on_success`)
+- External JSONL payload bank loading via `attack_config.bank_path`
+- Codex-style interactive TUI (`cot-redteam tui --config …`) with:
+  status header, multi-model board, activity log, model output, last
+  successful disclosure, and slash commands (`/model`, `/add`, `/payloads`,
+  `/run`, `/stop`, `/effort`, `/quit`, …)
+- Progress event stream (`RunEvent`) from the evaluation engine for UIs
+- `docs/tui.md` and README screenshot of the adaptive dashboard
+
+### Fixed
+
+- System-canary success no longer counts refusal analysis that only quotes the
+  canary while saying the user is attempting prompt injection; success requires
+  real disclosure (final text, or non-refusal reasoning leak)
+
+### Dependencies
+
+- `rich` and `textual` for the live / interactive TUI
+
 ## 0.3.0 — 2026-07-29
 
 ### Added

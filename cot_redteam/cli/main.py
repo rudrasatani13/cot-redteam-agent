@@ -112,6 +112,24 @@ def _build_parser() -> argparse.ArgumentParser:
     evolve.add_argument("--config", required=True)
     evolve.add_argument("--generator-model", default=None)
     evolve.add_argument("--target-model", default=None)
+
+    tui = sub.add_parser(
+        "tui",
+        help="interactive Codex-style adaptive red-team TUI (rich + textual)",
+    )
+    tui.add_argument("--config", required=True)
+    tui.add_argument("--sample-count", type=int, default=None)
+    tui.add_argument("--seed", type=int, default=None)
+    tui.add_argument(
+        "--auto-start",
+        action="store_true",
+        help="start the evaluation immediately without waiting for /run",
+    )
+    tui.add_argument(
+        "--live-only",
+        action="store_true",
+        help="non-interactive Rich live dashboard (no slash commands)",
+    )
     return parser
 
 
@@ -444,6 +462,21 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     return asyncio.run(_evolve_async(args))
 
 
+def cmd_tui(args: argparse.Namespace) -> int:
+    from cot_redteam.tui.app import run_tui_sync
+
+    overrides = {}
+    if args.sample_count is not None:
+        overrides["evaluation.sample_count"] = args.sample_count
+    if args.seed is not None:
+        overrides["global.seed"] = args.seed
+    config = load_config(args.config, overrides=overrides or None)
+    return run_tui_sync(
+        config,
+        interactive=not args.live_only,
+        auto_start=bool(args.auto_start or args.live_only),
+    )
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -454,6 +487,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "list-providers": cmd_list_providers,
         "list-suites": cmd_list_suites,
         "run": cmd_run,
+        "tui": cmd_tui,
         "list-runs": cmd_list_runs,
         "show-run": cmd_show_run,
         "report": cmd_report,

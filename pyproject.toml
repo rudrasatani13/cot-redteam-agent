@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cot-redteam-agent"
-version = "0.3.0"
+version = "0.4.0"
 description = "Automated Chain-of-Thought Red Teaming Agent"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,17 +27,15 @@ dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.0",
     "scipy>=1.11",
+    "rich>=13.0",
+    "textual>=0.80",
 ]
 
-[project.urls]
-Homepage = "https://github.com/rudrasatani13/cot-redteam-agent"
-Source = "https://github.com/rudrasatani13/cot-redteam-agent"
-Issues = "https://github.com/rudrasatani13/cot-redteam-agent/issues"
-Changelog = "https://github.com/rudrasatani13/cot-redteam-agent/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/rudrasatani13/cot-redteam-agent#readme"
-Security = "https://github.com/rudrasatani13/cot-redteam-agent/security/policy"
-
 [project.optional-dependencies]
+tui = [
+    "rich>=13.0",
+    "textual>=0.80",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
@@ -47,7 +45,17 @@ dev = [
     "build>=1.0",
     "pip-tools>=7.0",
     "types-PyYAML>=6.0",
+    "rich>=13.0",
+    "textual>=0.80",
 ]
+
+[project.urls]
+Homepage = "https://github.com/rudrasatani13/cot-redteam-agent"
+Source = "https://github.com/rudrasatani13/cot-redteam-agent"
+Issues = "https://github.com/rudrasatani13/cot-redteam-agent/issues"
+Changelog = "https://github.com/rudrasatani13/cot-redteam-agent/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/rudrasatani13/cot-redteam-agent#readme"
+Security = "https://github.com/rudrasatani13/cot-redteam-agent/security/policy"
 
 [project.scripts]
 cot-redteam = "cot_redteam.cli.main:entrypoint"
@@ -63,7 +71,12 @@ where = ["."]
 include = ["cot_redteam*"]
 
 [tool.setuptools.package-data]
-cot_redteam = ["py.typed", "eval/datasets/*.jsonl", "data/*"]
+cot_redteam = [
+    "py.typed",
+    "eval/datasets/*.jsonl",
+    "data/*",
+    "attacks/injection/*.jsonl",
+]
 
 [tool.ruff]
 line-length = 100

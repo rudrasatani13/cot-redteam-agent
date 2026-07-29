@@ -9,5 +9,7 @@ def test_attack_ids_stable() -> None:
     bootstrap_plugins(force=True)
     ids = set(AttackRegistry.ids())
     assert "injection.cot_injection" in ids
+    assert "injection.system_canary" in ids
+    assert "injection.system_canary_adaptive" in ids
     assert "evasion.nl_camouflage" in ids
     assert "generative.evolved" in ids

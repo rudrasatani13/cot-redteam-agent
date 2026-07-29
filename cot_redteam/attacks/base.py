@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import ClassVar
 
 from cot_redteam.core.types import (
@@ -27,6 +27,20 @@ class BaseAttack(ABC):
     @abstractmethod
     def create_prompt(self, sample: DatasetSample) -> AttackPrompt:
         """Create the attack prompt for a dataset sample."""
+
+    def create_prompts(self, sample: DatasetSample) -> Sequence[AttackPrompt]:
+        """Return ordered payload variants for adaptive multi-attempt evaluation.
+
+        Default: a single prompt. Adaptive attacks override this to expose a
+        full payload bank so the engine can try the next prompt when one fails.
+        """
+        return (self.create_prompt(sample),)
+
+    @property
+    def stop_on_success(self) -> bool:
+        """If True, the engine stops trying further payloads after a success."""
+        raw = self.config.get("stop_on_success", True)
+        return bool(raw)
 
     @abstractmethod
     def assess(

@@ -1,4 +1,4 @@
-# CoT Red Team Agent 0.3 example configuration
+# CoT Red Team Agent 0.4 example configuration
 # Credentials come from environment variables named below — never commit secrets.
 
 version: 2
@@ -52,7 +52,9 @@ evaluation:
   models:
     - openrouter:replace-with-model-id
   attacks:
-    - injection.system_canary
+    # Prefer adaptive multi-payload looping for educational vulnerability discovery.
+    # Falls back to single-prompt injection.system_canary if you want one fixed payload.
+    - injection.system_canary_adaptive
   monitors:
     - regex
   # Packaged sample dataset (works from installed wheels). Override with a local path if needed.
@@ -77,6 +79,11 @@ evaluation:
   retain_prompts: true
   retain_responses: true
   retain_reasoning: true
+  attack_config:
+    injection.system_canary_adaptive:
+      bank_path: pkg:system_canary_bank.jsonl
+      max_payloads: 12
+      stop_on_success: true
   monitor_config:
     regex:
       patterns: []

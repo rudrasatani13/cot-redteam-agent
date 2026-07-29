@@ -19,6 +19,7 @@ from cot_redteam.core.types import EvaluationRun, ModelRef, TargetCapabilities
 from cot_redteam.eval.budgets import BudgetTracker
 from cot_redteam.eval.dataset import Dataset
 from cot_redteam.eval.engine import EvaluationEngine
+from cot_redteam.eval.events import ProgressCallback
 from cot_redteam.eval.manifest import (
     ArtifactRecord,
     build_benchmark_manifest,
@@ -46,6 +47,7 @@ async def run_evaluation(
     run_store: SQLiteRunStore | None = None,
     artifact_store: ArtifactStore | None = None,
     environ: Mapping[str, str] | None = None,
+    progress: ProgressCallback | None = None,
 ) -> EvaluationRun:
     """Plan and execute an evaluation run end-to-end."""
     bootstrap_plugins()
@@ -67,6 +69,7 @@ async def run_evaluation(
         config=config,
         plugin_context=context,
         close_providers=False,  # API owns factory lifecycle
+        progress=progress,
     )
     try:
         run = await engine.run(plan)

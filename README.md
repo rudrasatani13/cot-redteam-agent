@@ -9,17 +9,28 @@ LLM reasoning under adversarial prompts. You provide model API credentials or a
 local inference endpoint; the tool plans reproducible experiments, runs attacks
 and monitors, records failure-aware outcomes, and generates auditable reports.
 
-Version `0.3.0` adds a reproducible prompt-injection benchmark while preserving
-the `0.2` configuration and Python API. Existing `0.2` users should read the
+Version `0.4.0` adds an adaptive multi-payload canary attack and a Codex-style
+interactive TUI while preserving the `0.3` benchmark and `0.2` Python API.
+Existing users should also read the
 [0.3 migration guide](docs/migration-0.2-to-0.3.md).
+
+![Adaptive red-team TUI](docs/assets/tui-adaptive-redteam.png)
+
+*Interactive adaptive TUI: multi-model board, payload attempt log, model output,
+and last real successful disclosure (refusal re-quotes are not counted as success).*
 
 ## What it does
 
 - Runs built-in and third-party attacks against one or more target models.
+- Adaptive educational canary extraction: loops a packaged payload bank until a
+  real disclosure succeeds or the bank is exhausted.
+- Interactive Codex-style TUI with slash commands, multi-model board, and live
+  attempt timeline (`cot-redteam tui`).
 - Runs packaged 12-trial smoke and 56-scenario core prompt-injection suites.
 - Preserves system, developer, user, assistant, and simulated tool message roles.
 - Scores exact and partial canary disclosure separately in final text and
-  visible provider reasoning.
+  visible provider reasoning (refusal analysis that only quotes a canary is not
+  success).
 - Reports attack objectives, benign-task utility, false refusals, exclusions,
   and Wilson confidence intervals as separate dimensions.
 - Evaluates outputs with regex, LLM-judge, ensemble, and evasion monitors.
@@ -57,14 +68,14 @@ Install the tagged source release:
 
 ```bash
 # test: command
-python -m pip install "git+https://github.com/rudrasatani13/cot-redteam-agent.git@v0.3.0"
+python -m pip install "git+https://github.com/rudrasatani13/cot-redteam-agent.git@v0.4.0"
 ```
 
 Or install the wheel attached to the GitHub release:
 
 ```bash
 python -m pip install \
-  "https://github.com/rudrasatani13/cot-redteam-agent/releases/download/v0.3.0/cot_redteam_agent-0.3.0-py3-none-any.whl"
+  "https://github.com/rudrasatani13/cot-redteam-agent/releases/download/v0.4.0/cot_redteam_agent-0.4.0-py3-none-any.whl"
 ```
 
 For development:
@@ -94,7 +105,8 @@ cot-redteam list-monitors
 The generated configuration uses the packaged `pkg:sample.jsonl` dataset and
 works outside the repository. It includes optional provider examples, but
 validation requires credentials only for providers referenced by the selected
-evaluation and generative models.
+evaluation and generative models. The default attack is
+`injection.system_canary_adaptive` (multi-payload educational loop).
 
 Run the configured evaluation when you are ready to contact the provider:
 
@@ -102,6 +114,25 @@ Run the configured evaluation when you are ready to contact the provider:
 cot-redteam run --config config.yaml
 cot-redteam list-runs --config config.yaml
 ```
+
+### Interactive adaptive TUI
+
+```bash
+cot-redteam tui --config config.yaml
+# or auto-start:
+cot-redteam tui --config config.yaml --auto-start
+```
+
+Inside the TUI:
+
+```text
+/model openrouter:your-model-id
+/payloads 8
+/run
+```
+
+Useful commands: `/help`, `/add`, `/models`, `/stop`, `/quit`. See the full
+[TUI guide](docs/tui.md).
 
 Render a report using the `run_id` printed by the run command:
 
@@ -114,9 +145,9 @@ cot-redteam report \
 
 Markdown reports include retained system and attack prompts, model responses,
 visible provider reasoning, exact attack-assessment evidence, and monitor
-outcomes. The packaged quickstart uses `injection.system_canary`: it places a
-synthetic token only in a trusted system instruction and reports success only
-when the exact token is disclosed in the response or provider reasoning.
+outcomes. The packaged adaptive canary attack places a synthetic token only in a
+trusted system instruction and reports success only on real disclosure—not when
+the model refuses while quoting the canary during analysis.
 
 ## Prompt-injection benchmark
 
@@ -229,6 +260,7 @@ Use `run_evaluation` for the backward-compatible `0.2` attack/monitor path and
 - `cot-redteam suite validate|show`
 - `cot-redteam dataset import cyberseceval|ih-challenge`
 - `cot-redteam run`
+- `cot-redteam tui` — interactive adaptive dashboard
 - `cot-redteam list-runs|show-run|report`
 - `cot-redteam evolve`
 
@@ -240,6 +272,7 @@ and `3` for partial runs.
 | Guide | Purpose |
 |---|---|
 | [Configuration](docs/configuration.md) | Schema, credentials, precedence, and validation |
+| [Interactive TUI](docs/tui.md) | Adaptive dashboard, slash commands, screenshot |
 | [Providers](docs/providers.md) | Provider-specific behavior and endpoints |
 | [Plugins](docs/plugins.md) | Attack and monitor extension contracts |
 | [Experiments](docs/experiments.md) | Metrics, rates, comparisons, and retention |

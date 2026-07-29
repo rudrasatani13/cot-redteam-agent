@@ -288,3 +288,217 @@ async def test_attack_assess_error() -> None:
     )
     run = await engine.run(plan)
     assert run.items[0].status is ItemStatus.ATTACK_ERROR
+
+
+class _AdaptiveAttack(BaseAttack):
+    """Fails until the third payload — models educational stop-on-success loops."""
+
+    metadata = PluginMetadata(
+        id="test.adaptive_attack",
+        version="1.0.0",
+        description="adaptive multi-payload",
+    )
+
+    def create_prompt(self, sample: DatasetSample) -> AttackPrompt:
+        return self.create_prompts(sample)[0]
+
+    def create_prompts(self, sample: DatasetSample):
+        return tuple(
+            AttackPrompt(
+                attack_id=self.metadata.id,
+                text=f"{sample.question} :: payload-{i}",
+                sample_id=sample.id,
+                metadata={"payload_id": f"p{i}", "adaptive": True},
+            )
+            for i in range(1, 5)
+        )
+
+    def assess(self, sample, prompt, response) -> AttackAssessment:
+        del sample, response
+        payload_id = str(prompt.metadata.get("payload_id"))
+        success = payload_id == "p3"
+        return AttackAssessment(
+            success=success,
+            score=1.0 if success else 0.0,
+            evidence=(f"matched {payload_id}",) if success else (),
+        )
+
+
+class _CountingProvider:
+    def __init__(self) -> None:
+        self.n = 0
+        self.prompts: list[str] = []
+
+    async def generate(self, model: ModelRef, request: GenerationRequest) -> ModelResponse:
+        self.n += 1
+        self.prompts.append(request.prompt or "")
+        return ModelResponse(text="ok", model=model, usage=TokenUsage(1, 1))
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _CountingFactory:
+    def __init__(self, provider: _CountingProvider) -> None:
+        self.provider = provider
+
+    def create(self, model: ModelRef):
+        return self.provider
+
+    async def aclose(self) -> None:
+        await self.provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_engine_emits_progress_events_for_adaptive_loop() -> None:
+    AttackRegistry.register(
+        _AdaptiveAttack.metadata,
+        lambda config, context: _AdaptiveAttack(config),
+    )
+    events: list[str] = []
+
+    async def progress(event) -> None:
+        events.append(event.kind.value)
+
+    provider = _CountingProvider()
+    factory = _CountingFactory(provider)
+    engine = EvaluationEngine(
+        factory,
+        AttackRegistry,
+        MonitorRegistry,
+        BudgetTracker(BudgetSettings()),
+        concurrency=1,
+        progress=progress,
+    )
+    sample = DatasetSample(id="s1", question="q")
+    model = ModelRef.parse("fake:m")
+    plan = RunPlan(
+        run_id="run-events",
+        seed=1,
+        models=(model,),
+        attack_ids=("test.adaptive_attack",),
+        monitor_ids=("test.ok_monitor",),
+        samples=(sample,),
+        items=(
+            PlannedItem(
+                item_id="item-0",
+                model=model,
+                attack_id="test.adaptive_attack",
+                sample=sample,
+            ),
+        ),
+        dataset_digest="d",
+        temperature=0.0,
+        max_tokens=16,
+        cot_delimiters=("<think>", "</think>"),
+    )
+    await engine.run(plan)
+    assert events[0] == "run_started"
+    assert "attempt_started" in events
+    assert "attempt_finished" in events
+    assert events[-1] == "run_finished"
+
+
+@pytest.mark.asyncio
+async def test_adaptive_loop_stops_on_first_real_success() -> None:
+    AttackRegistry.register(
+        _AdaptiveAttack.metadata,
+        lambda config, context: _AdaptiveAttack(config),
+    )
+    provider = _CountingProvider()
+    factory = _CountingFactory(provider)
+    engine = EvaluationEngine(
+        factory, AttackRegistry, MonitorRegistry, BudgetTracker(BudgetSettings()), concurrency=1
+    )
+    sample = DatasetSample(id="s1", question="q")
+    model = ModelRef.parse("fake:m")
+    plan = RunPlan(
+        run_id="run-adaptive",
+        seed=1,
+        models=(model,),
+        attack_ids=("test.adaptive_attack",),
+        monitor_ids=("test.ok_monitor",),
+        samples=(sample,),
+        items=(
+            PlannedItem(
+                item_id="item-0",
+                model=model,
+                attack_id="test.adaptive_attack",
+                sample=sample,
+            ),
+        ),
+        dataset_digest="d",
+        temperature=0.0,
+        max_tokens=16,
+        cot_delimiters=("<think>", "</think>"),
+    )
+
+    run = await engine.run(plan)
+
+    assert run.items[0].status is ItemStatus.SUCCEEDED
+    assert run.items[0].assessment is not None
+    assert run.items[0].assessment.success is True
+    # p1 fail, p2 fail, p3 success -> stop (no p4)
+    assert provider.n == 3
+    assert run.items[0].prompt is not None
+    assert run.items[0].prompt.metadata["successful_payload_id"] == "p3"
+    assert run.items[0].prompt.metadata["attempt"] == 3
+    assert run.items[0].assessment.metrics["attempts_used"] == 3.0
+    history = run.items[0].prompt.metadata["attempt_history"]
+    assert len(history) == 3
+    assert history[0]["success"] is False
+    assert history[2]["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_adaptive_loop_can_exhaust_bank_without_false_success() -> None:
+    class _AlwaysFailAdaptive(_AdaptiveAttack):
+        metadata = PluginMetadata(
+            id="test.adaptive_fail_attack",
+            version="1.0.0",
+            description="always fail adaptive",
+        )
+
+        def assess(self, sample, prompt, response) -> AttackAssessment:
+            del sample, prompt, response
+            return AttackAssessment(success=False, score=0.0)
+
+    AttackRegistry.register(
+        _AlwaysFailAdaptive.metadata,
+        lambda config, context: _AlwaysFailAdaptive(config),
+    )
+    provider = _CountingProvider()
+    factory = _CountingFactory(provider)
+    engine = EvaluationEngine(
+        factory, AttackRegistry, MonitorRegistry, BudgetTracker(BudgetSettings()), concurrency=1
+    )
+    sample = DatasetSample(id="s1", question="q")
+    model = ModelRef.parse("fake:m")
+    plan = RunPlan(
+        run_id="run-adaptive-fail",
+        seed=1,
+        models=(model,),
+        attack_ids=("test.adaptive_fail_attack",),
+        monitor_ids=("test.ok_monitor",),
+        samples=(sample,),
+        items=(
+            PlannedItem(
+                item_id="item-0",
+                model=model,
+                attack_id="test.adaptive_fail_attack",
+                sample=sample,
+            ),
+        ),
+        dataset_digest="d",
+        temperature=0.0,
+        max_tokens=16,
+        cot_delimiters=("<think>", "</think>"),
+    )
+
+    run = await engine.run(plan)
+
+    assert run.items[0].status is ItemStatus.SUCCEEDED
+    assert run.items[0].assessment is not None
+    assert run.items[0].assessment.success is False
+    assert provider.n == 4
+    assert "exhausted" in run.items[0].assessment.explanation.lower()
