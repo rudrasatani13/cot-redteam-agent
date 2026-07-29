@@ -60,8 +60,12 @@ jobs:
         run: |
           python -m pip install -U pip build
           python -m pip install -e ".[dev]"
+          rm -rf dist
           python -m build
-          python -m pip install --force-reinstall --no-deps dist/cot_redteam_agent-0.3.0-py3-none-any.whl
+          WHEEL="$(ls -1 dist/cot_redteam_agent-*-py3-none-any.whl | sort -V | tail -1)"
+          test -n "$WHEEL"
+          echo "Installing $WHEEL"
+          python -m pip install --force-reinstall --no-deps "$WHEEL"
           cot-redteam --help
           SMOKE="$(mktemp -d)"
           cd "$SMOKE"
@@ -69,9 +73,13 @@ jobs:
           # validate without real remote keys for local providers only would fail;
           # ensure packaged dataset marker resolves by loading config
           python - <<'PY'
+          from importlib.resources import files
+
           from cot_redteam.core.config import load_config
           from cot_redteam.eval.dataset import Dataset
           from cot_redteam.benchmark.corpora import load_builtin_suite
+          from cot_redteam.attacks.injection.payload_bank import load_payload_bank
+
           cfg = load_config("config.yaml")
           assert cfg.evaluation.dataset_path.startswith("pkg:") or "sample" in cfg.evaluation.dataset_path
           ds = Dataset.load_jsonl(cfg.evaluation.dataset_path)
@@ -80,4 +88,10 @@ jobs:
           assert len(load_builtin_suite("builtin.smoke").scenarios) == 12
           assert len(load_builtin_suite("builtin.core").scenarios) == 56
           print("wheel benchmark suites ok")
+          bank = load_payload_bank()
+          assert len(bank) >= 10
+          assert files("cot_redteam.attacks.injection").joinpath(
+              "system_canary_bank.jsonl"
+          ).is_file()
+          print("wheel payload bank ok", len(bank))
           PY
