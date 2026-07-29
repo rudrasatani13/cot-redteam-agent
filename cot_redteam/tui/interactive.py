@@ -114,48 +114,50 @@ if TEXTUAL_AVAILABLE:
             min-height: 3;
             max-height: 4;
         }
-        /* Grok-style composer: thin single-line input + dim key hints under it */
+        /*
+         * Command composer (IMPORTANT — do not set Input height to 1):
+         * Textual Input needs height 3 for a usable text row (border + cursor).
+         * Colors stay muted/chat-like; box stays fully visible.
+         */
         #bottom {
-            height: 3;
-            min-height: 3;
-            max-height: 3;
+            height: 5;
+            min-height: 5;
+            max-height: 5;
             layout: vertical;
-            background: #0b0f14;
-            border-top: solid #27272a;
+            background: #09090b;
+            border-top: solid #3f3f46;
             padding: 0 1;
         }
         #command-row {
-            height: 1;
-            min-height: 1;
-            max-height: 1;
+            height: 3;
+            min-height: 3;
+            max-height: 3;
             layout: horizontal;
-            background: #0b0f14;
-            align: left middle;
+            background: #09090b;
             padding: 0;
+            align: left middle;
         }
-        /* Borderless single-line field — looks like chat composer, not a form brick */
         #command {
             width: 1fr;
-            height: 1;
-            min-height: 1;
-            max-height: 1;
+            height: 3;
+            min-height: 3;
+            max-height: 3;
             background: #18181b;
             color: #fafafa;
-            border: blank;
-            padding: 0 1;
-            margin: 0;
+            border: tall #52525b;
+            padding: 0 2;
         }
         #command:focus {
             background: #27272a;
             color: #ffffff;
-            border: blank;
+            border: tall #a1a1aa;
         }
         #keys-bar {
             height: 1;
             min-height: 1;
             max-height: 1;
             color: #71717a;
-            background: #0b0f14;
+            background: #09090b;
             content-align: left middle;
             padding: 0 1;
         }
@@ -217,10 +219,10 @@ if TEXTUAL_AVAILABLE:
                     yield Static(id="output")
                 yield Static(id="leak")
             with Vertical(id="bottom"):
-                # Input first (composer), hints under it — like chat UIs
+                # height-3 Input is required for Textual to show cursor + placeholder
                 with Horizontal(id="command-row"):
                     yield Input(
-                        placeholder="/run",
+                        placeholder="Type /run here, then press Enter",
                         id="command",
                     )
                 yield Static(

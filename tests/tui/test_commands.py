@@ -1,6 +1,23 @@
 """Slash command parser tests."""
 
+import re
+
 from cot_redteam.tui.commands import CommandKind, parse_command
+
+
+def test_tui_command_input_css_is_visible_height() -> None:
+    """Regression: height-1 / borderless Input disappears in the terminal."""
+    from cot_redteam.tui.interactive import TEXTUAL_AVAILABLE, RedTeamTuiApp
+
+    if not TEXTUAL_AVAILABLE:
+        return
+    css = RedTeamTuiApp.CSS
+    block = re.search(r"#command \{([^}]+)\}", css, re.S)
+    assert block is not None
+    body = block.group(1)
+    assert "height: 1" not in body
+    assert "height: 3" in body
+    assert "border: blank" not in body
 
 
 def test_parse_help_and_aliases() -> None:
