@@ -14,7 +14,7 @@ pull requests; follow [SECURITY.md](SECURITY.md).
 - Search existing issues and pull requests.
 - Open an issue before large behavioral or public-API changes.
 - Keep changes focused; avoid unrelated refactoring.
-- Preserve backward compatibility within `0.2.x` unless the change fixes a
+- Preserve backward compatibility within `0.3.x` unless the change fixes a
   security or correctness defect that cannot be addressed compatibly.
 - Never include real API keys, provider responses, proprietary datasets, or
   generated artifacts.

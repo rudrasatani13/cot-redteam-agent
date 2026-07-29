@@ -9,17 +9,25 @@ LLM reasoning under adversarial prompts. You provide model API credentials or a
 local inference endpoint; the tool plans reproducible experiments, runs attacks
 and monitors, records failure-aware outcomes, and generates auditable reports.
 
-Version `0.2.0` is an intentional breaking rewrite of `0.1.x`. Existing users
-should read the [migration guide](docs/migration-0.1-to-0.2.md).
+Version `0.3.0` adds a reproducible prompt-injection benchmark while preserving
+the `0.2` configuration and Python API. Existing `0.2` users should read the
+[0.3 migration guide](docs/migration-0.2-to-0.3.md).
 
 ## What it does
 
 - Runs built-in and third-party attacks against one or more target models.
+- Runs packaged 12-trial smoke and 56-scenario core prompt-injection suites.
+- Preserves system, developer, user, assistant, and simulated tool message roles.
+- Scores exact and partial canary disclosure separately in final text and
+  visible provider reasoning.
+- Reports attack objectives, benign-task utility, false refusals, exclusions,
+  and Wilson confidence intervals as separate dimensions.
 - Evaluates outputs with regex, LLM-judge, ensemble, and evasion monitors.
 - Distinguishes provider, attack, monitor, budget, and cancellation failures.
 - Tracks request, token, elapsed-time, and estimated-cost budgets.
 - Stores runs transactionally in SQLite with retention-aware redaction.
 - Produces Markdown, CSV, and LaTeX reports with honest eligibility counts.
+- Produces lossless JSONL benchmark evidence for retained multi-turn transcripts.
 - Writes reproducibility manifests and detached artifact checksums.
 - Evolves bounded populations of generated attack templates through the normal
   evaluation engine.
@@ -36,6 +44,7 @@ represent ground truth.
 | Anthropic | `anthropic` | Anthropic Messages API models |
 | vLLM | `vllm` | Local or self-hosted OpenAI-compatible server |
 | llama.cpp | `llamacpp` | Local llama.cpp OpenAI-compatible server |
+| Generic endpoint | `openai_compatible` | Explicit user-selected compatible API |
 
 Provider keys are read only from named environment variables. Secrets must not
 be placed directly in YAML files.
@@ -48,14 +57,14 @@ Install the tagged source release:
 
 ```bash
 # test: command
-python -m pip install "git+https://github.com/rudrasatani13/cot-redteam-agent.git@v0.2.0"
+python -m pip install "git+https://github.com/rudrasatani13/cot-redteam-agent.git@v0.3.0"
 ```
 
 Or install the wheel attached to the GitHub release:
 
 ```bash
 python -m pip install \
-  "https://github.com/rudrasatani13/cot-redteam-agent/releases/download/v0.2.0/cot_redteam_agent-0.2.0-py3-none-any.whl"
+  "https://github.com/rudrasatani13/cot-redteam-agent/releases/download/v0.3.0/cot_redteam_agent-0.3.0-py3-none-any.whl"
 ```
 
 For development:
@@ -75,6 +84,7 @@ Create a wheel-safe example configuration:
 ```bash
 # test: command
 cot-redteam init --path config.yaml
+# Edit evaluation.models and generative model IDs for your provider route.
 export OPENROUTER_API_KEY=your-key
 cot-redteam config validate --config config.yaml
 cot-redteam list-attacks
@@ -107,6 +117,51 @@ visible provider reasoning, exact attack-assessment evidence, and monitor
 outcomes. The packaged quickstart uses `injection.system_canary`: it places a
 synthetic token only in a trusted system instruction and reports success only
 when the exact token is disclosed in the response or provider reasoning.
+
+## Prompt-injection benchmark
+
+List the packaged suites:
+
+```bash
+cot-redteam list-suites
+cot-redteam suite show --id builtin.smoke
+```
+
+In `config.yaml`, select a suite and remove the legacy `attacks` and `monitors`
+entries if you want a benchmark-only run:
+
+```yaml
+evaluation:
+  models:
+    - openrouter:your-model-route
+  suite_ids:
+    - builtin.smoke
+  repetitions: 1
+  budgets:
+    # 12 trials; one is two-turn, so the target-request minimum is 13.
+    max_requests: 13
+  retain_prompts: true
+  retain_responses: true
+  retain_reasoning: true
+```
+
+Provider capabilities are declared under `providers.<name>.capabilities`.
+Unsupported roles fail during `config validate`, before any billed request.
+The packaged smoke suite includes a simulated tool-output case, so the selected
+route must declare `tool_role: true`; otherwise use a filtered local suite.
+
+Run and inspect it with the same commands:
+
+```bash
+cot-redteam config validate --config config.yaml
+cot-redteam run --config config.yaml
+cot-redteam report --config config.yaml --run-id RUN_ID --format markdown
+cot-redteam report --config config.yaml --run-id RUN_ID --format jsonl
+```
+
+Benchmark results apply only to the tested model route, provider behavior,
+policy, suite version, transformations, and repetitions. They are not a
+universal model-security score. See the [benchmark guide](docs/benchmarking.md).
 
 ## Visible reasoning and interpretation
 
@@ -149,26 +204,30 @@ the [security policy](SECURITY.md).
 # test: python
 import asyncio
 
-from cot_redteam.api import run_evaluation
+from cot_redteam.api import run_benchmark
 from cot_redteam.core.config import load_config
 
 
 async def main() -> None:
     config = load_config("config.yaml")
-    run = await run_evaluation(config)
-    print(run.run_id, run.status.value)
+    run = await run_benchmark(config)
+    print(run.run_id, len(run.trials))
 
 
 asyncio.run(main())
 ```
 
-`run_evaluation` contacts configured providers and may incur cost.
+Use `run_evaluation` for the backward-compatible `0.2` attack/monitor path and
+`run_benchmark` for configured suites. Both contact providers and may incur cost.
 
 ## CLI reference
 
 - `cot-redteam init`
 - `cot-redteam config validate|show`
 - `cot-redteam list-attacks|list-monitors|list-providers`
+- `cot-redteam list-suites`
+- `cot-redteam suite validate|show`
+- `cot-redteam dataset import cyberseceval|ih-challenge`
 - `cot-redteam run`
 - `cot-redteam list-runs|show-run|report`
 - `cot-redteam evolve`
@@ -184,6 +243,8 @@ and `3` for partial runs.
 | [Providers](docs/providers.md) | Provider-specific behavior and endpoints |
 | [Plugins](docs/plugins.md) | Attack and monitor extension contracts |
 | [Experiments](docs/experiments.md) | Metrics, rates, comparisons, and retention |
+| [Benchmarking](docs/benchmarking.md) | Suites, capabilities, scoring, reports, and imports |
+| [0.3 migration](docs/migration-0.2-to-0.3.md) | Additive changes from `0.2.x` |
 | [Migration](docs/migration-0.1-to-0.2.md) | Breaking changes from `0.1.x` |
 | [Support](SUPPORT.md) | Where to ask questions or report reproducible bugs |
 | [Contributing](CONTRIBUTING.md) | Development and pull-request workflow |

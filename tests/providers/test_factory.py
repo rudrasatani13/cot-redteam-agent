@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from cot_redteam.core.config import load_config
+from cot_redteam.core.config import AppConfig, load_config
 from cot_redteam.core.errors import ConfigurationError
 from cot_redteam.core.types import ModelRef
 from cot_redteam.providers.factory import ProviderFactory
@@ -49,3 +49,28 @@ def test_provider_instance_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     a = factory.create(ModelRef.parse("openrouter:test/model"))
     b = factory.create(ModelRef.parse("openrouter:other/model"))
     assert a is b
+
+
+def test_generic_openai_compatible_provider_allows_optional_key() -> None:
+    base = load_config(FIXTURES)
+    raw = base.model_dump(mode="python", by_alias=True)
+    raw["providers"]["gateway"] = {
+        "kind": "openai_compatible",
+        "base_url": "https://gateway.example/v1",
+        "timeout": 30,
+        "max_retries": 0,
+        "concurrency": 1,
+        "capabilities": {
+            "system_role": True,
+            "developer_role": True,
+            "multi_turn": True,
+        },
+    }
+    config = AppConfig.model_validate(raw)
+    factory = ProviderFactory(config, environ={})
+
+    provider = factory.create(ModelRef.parse("gateway:model-a"))
+
+    assert provider.capabilities.system_role is True
+    assert provider.capabilities.developer_role is True
+    assert provider.capabilities.multi_turn is True

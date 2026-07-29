@@ -2,13 +2,14 @@
 
 ## Supported versions
 
-Security fixes are provided for the latest `0.2.x` release and may be applied
+Security fixes are provided for the latest `0.3.x` release and may be applied
 to the unreleased default branch before the next patch release. Version
 `0.1.x` is unsupported.
 
 | Version | Supported |
 |---|---|
-| Latest `0.2.x` | Yes |
+| Latest `0.3.x` | Yes |
+| `0.2.x` | No |
 | `0.1.x` | No |
 
 ## Reporting a vulnerability
@@ -53,6 +54,8 @@ boundaries.
   through unsafe path interpretation.
 - Generated attack specifications are data and must never be evaluated as
   Python or shell code.
+- Imported benchmark rows are untrusted data. Importers must never execute
+  dataset-provided graders, templates, plugins, or scripts.
 - Provider requests must use explicitly configured endpoints with bounded
   retries, timeouts, concurrency, request counts, token limits, and estimated
   cost controls.

@@ -10,7 +10,11 @@ from cot_redteam.core.types import (
     AttackAssessment,
     AttackPrompt,
     EvaluationItem,
+    GenerationRequest,
     ItemStatus,
+    Message,
+    MessageRole,
+    MessageTrust,
     ModelRef,
     ModelResponse,
     MonitorOutcome,
@@ -136,3 +140,52 @@ def test_error_item_requires_message() -> None:
 def test_score_bounds() -> None:
     with pytest.raises(ValueError, match="score"):
         AttackAssessment(success=True, score=1.5)
+
+
+def test_message_normalizes_name_and_copies_metadata() -> None:
+    metadata = {"channel": "retrieval"}
+    message = Message(
+        role=MessageRole.TOOL,
+        content="untrusted document",
+        name="  search  ",
+        trust=MessageTrust.UNTRUSTED,
+        metadata=metadata,
+    )
+    metadata["channel"] = "changed"
+    assert message.name == "search"
+    assert message.metadata == {"channel": "retrieval"}
+
+
+def test_message_rejects_empty_content() -> None:
+    with pytest.raises(ValueError, match="content"):
+        Message(role=MessageRole.USER, content=" ")
+
+
+def test_generation_request_accepts_messages_or_legacy_prompt() -> None:
+    legacy = GenerationRequest(prompt="hello", system_prompt="policy")
+    conversation = GenerationRequest(
+        messages=(
+            Message(role=MessageRole.SYSTEM, content="policy"),
+            Message(role=MessageRole.USER, content="hello"),
+        )
+    )
+    assert legacy.prompt == "hello"
+    assert [message.role for message in conversation.messages] == [
+        MessageRole.SYSTEM,
+        MessageRole.USER,
+    ]
+
+
+def test_generation_request_rejects_mixed_or_empty_forms() -> None:
+    with pytest.raises(ValueError, match="exactly one"):
+        GenerationRequest()
+    with pytest.raises(ValueError, match="exactly one"):
+        GenerationRequest(
+            prompt="hello",
+            messages=(Message(role=MessageRole.USER, content="hello"),),
+        )
+    with pytest.raises(ValueError, match="system_prompt"):
+        GenerationRequest(
+            system_prompt="policy",
+            messages=(Message(role=MessageRole.USER, content="hello"),),
+        )

@@ -42,6 +42,19 @@ class ReasoningSource(str, Enum):
     ABSENT = "absent"
 
 
+class MessageRole(str, Enum):
+    SYSTEM = "system"
+    DEVELOPER = "developer"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+
+
+class MessageTrust(str, Enum):
+    TRUSTED = "trusted"
+    UNTRUSTED = "untrusted"
+
+
 class AttackCategory(str, Enum):
     INJECTION = "injection"
     FAITHFULNESS = "faithfulness"
@@ -125,21 +138,104 @@ class DatasetSample:
 
 
 @dataclass(frozen=True)
+class Message:
+    role: MessageRole
+    content: str
+    name: str | None = None
+    trust: MessageTrust = MessageTrust.TRUSTED
+    source: str | None = None
+    metadata: Mapping[str, JsonValue] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        content = self.content.strip()
+        if not content:
+            raise ValueError("message content must be non-empty")
+        object.__setattr__(self, "content", content)
+        if self.name is not None:
+            name = self.name.strip()
+            if not name:
+                raise ValueError("message name must be non-empty when provided")
+            object.__setattr__(self, "name", name)
+        if self.source is not None:
+            source = self.source.strip()
+            if not source:
+                raise ValueError("message source must be non-empty when provided")
+            object.__setattr__(self, "source", source)
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+
+@dataclass(frozen=True)
+class TargetCapabilities:
+    system_role: bool = False
+    developer_role: bool = False
+    multi_turn: bool = False
+    tool_role: bool = False
+    visible_reasoning: bool = False
+    native_seed: bool = False
+    input_modalities: tuple[str, ...] = ("text",)
+    output_modalities: tuple[str, ...] = ("text",)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "input_modalities", tuple(self.input_modalities))
+        object.__setattr__(self, "output_modalities", tuple(self.output_modalities))
+        if not self.input_modalities or not self.output_modalities:
+            raise ValueError("target modalities must not be empty")
+
+
+@dataclass(frozen=True)
+class TargetRequirements:
+    system_role: bool = False
+    developer_role: bool = False
+    multi_turn: bool = False
+    tool_role: bool = False
+    visible_reasoning: bool = False
+    native_seed: bool = False
+
+    def missing_from(self, capabilities: TargetCapabilities) -> tuple[str, ...]:
+        names = (
+            "system_role",
+            "developer_role",
+            "multi_turn",
+            "tool_role",
+            "visible_reasoning",
+            "native_seed",
+        )
+        return tuple(
+            name for name in names if getattr(self, name) and not getattr(capabilities, name)
+        )
+
+    def validate(self, capabilities: TargetCapabilities) -> None:
+        missing = self.missing_from(capabilities)
+        if missing:
+            raise ValueError(f"target is missing required capabilities: {', '.join(missing)}")
+
+
+@dataclass(frozen=True)
 class GenerationRequest:
-    prompt: str
+    prompt: str | None = None
     system_prompt: str | None = None
+    messages: tuple[Message, ...] = ()
     temperature: float = 0.7
     max_tokens: int = 4096
     stop: tuple[str, ...] = ()
     metadata: Mapping[str, JsonValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.prompt:
-            raise ValueError("prompt is required")
+        has_prompt = self.prompt is not None and bool(self.prompt.strip())
+        has_messages = bool(self.messages)
+        if has_prompt == has_messages:
+            raise ValueError("exactly one of prompt or messages is required")
+        if self.prompt is not None and not self.prompt.strip():
+            raise ValueError("prompt must be non-empty when provided")
+        if has_messages and self.system_prompt is not None:
+            raise ValueError("system_prompt is only valid with the legacy prompt form")
         if not 0.0 <= self.temperature <= 2.0:
             raise ValueError("temperature must be between 0.0 and 2.0")
         if self.max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
+        if self.prompt is not None:
+            object.__setattr__(self, "prompt", self.prompt.strip())
+        object.__setattr__(self, "messages", tuple(self.messages))
         object.__setattr__(self, "stop", tuple(self.stop))
         object.__setattr__(self, "metadata", dict(self.metadata))
 

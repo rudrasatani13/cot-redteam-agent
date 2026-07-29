@@ -26,8 +26,24 @@ class GlobalSettings(StrictModel):
     concurrency: int = Field(default=4, ge=1)
 
 
+class TargetCapabilitySettings(StrictModel):
+    system_role: bool = True
+    developer_role: bool = False
+    multi_turn: bool = True
+    tool_role: bool = False
+    visible_reasoning: bool = False
+    native_seed: bool = False
+
+
 class ProviderSettings(StrictModel):
-    kind: Literal["openrouter", "openai", "anthropic", "vllm", "llamacpp"]
+    kind: Literal[
+        "openrouter",
+        "openai",
+        "anthropic",
+        "vllm",
+        "llamacpp",
+        "openai_compatible",
+    ]
     base_url: str | None = None
     api_key_env: str | None = None
     timeout: float = Field(default=120.0, gt=0)
@@ -37,10 +53,15 @@ class ProviderSettings(StrictModel):
     headers: dict[str, str] = Field(default_factory=dict)
     input_price_per_million: float | None = Field(default=None, ge=0)
     output_price_per_million: float | None = Field(default=None, ge=0)
+    capabilities: TargetCapabilitySettings = Field(default_factory=TargetCapabilitySettings)
 
     @model_validator(mode="after")
     def _remote_requires_api_key_env(self) -> ProviderSettings:
         if self.kind in ("vllm", "llamacpp"):
+            return self
+        if self.kind == "openai_compatible":
+            if not self.base_url:
+                raise ValueError("openai_compatible providers require base_url")
             return self
         if not self.api_key_env:
             raise ValueError(f"remote provider kind {self.kind!r} requires api_key_env")
@@ -60,6 +81,15 @@ class EvaluationSettings(StrictModel):
     attacks: list[str] = Field(default_factory=list)
     monitors: list[str] = Field(default_factory=list)
     dataset_path: str = "pkg:sample.jsonl"
+    suite_paths: list[str] = Field(default_factory=list)
+    suite_ids: list[str] = Field(default_factory=list)
+    policy_ids: list[str] = Field(default_factory=list)
+    technique_ids: list[str] = Field(default_factory=list)
+    transformation_ids: list[str] = Field(default_factory=list)
+    repetitions: int = Field(default=1, ge=1)
+    judge_model: str | None = None
+    judge_scorers: list[str] = Field(default_factory=list)
+    max_expanded_trials: int = Field(default=10_000, ge=1)
     sample_count: int | None = Field(default=None, ge=1)
     sample_ids: list[str] | None = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
@@ -75,7 +105,17 @@ class EvaluationSettings(StrictModel):
     retain_responses: bool = True
     retain_reasoning: bool = True
 
-    @field_validator("models", "attacks", "monitors")
+    @field_validator(
+        "models",
+        "attacks",
+        "monitors",
+        "suite_paths",
+        "suite_ids",
+        "policy_ids",
+        "technique_ids",
+        "transformation_ids",
+        "judge_scorers",
+    )
     @classmethod
     def _non_empty_strings(cls, value: list[str]) -> list[str]:
         for item in value:
@@ -138,12 +178,28 @@ class AppConfig(StrictModel):
                 raise ValueError(f"invalid model reference {model_ref!r}") from exc
             if ref.provider not in self.providers:
                 raise ValueError(f"evaluation model provider {ref.provider!r} is not configured")
+        if self.evaluation.judge_model:
+            try:
+                judge_ref = ModelRef.parse(self.evaluation.judge_model)
+            except ValueError as exc:
+                raise ValueError(
+                    f"invalid judge model reference {self.evaluation.judge_model!r}"
+                ) from exc
+            if judge_ref.provider not in self.providers:
+                raise ValueError(f"judge model provider {judge_ref.provider!r} is not configured")
         return self
 
 
 class ResolvedProviderSettings(StrictModel):
     name: str
-    kind: Literal["openrouter", "openai", "anthropic", "vllm", "llamacpp"]
+    kind: Literal[
+        "openrouter",
+        "openai",
+        "anthropic",
+        "vllm",
+        "llamacpp",
+        "openai_compatible",
+    ]
     base_url: str
     api_key: SecretStr | None = None
     api_key_env: str | None = None
@@ -154,6 +210,7 @@ class ResolvedProviderSettings(StrictModel):
     headers: dict[str, str] = Field(default_factory=dict)
     input_price_per_million: float | None = None
     output_price_per_million: float | None = None
+    capabilities: TargetCapabilitySettings = Field(default_factory=TargetCapabilitySettings)
 
     def __repr__(self) -> str:
         return (
@@ -176,6 +233,15 @@ DOCUMENTED_OVERRIDES = {
     "evaluation.attacks",
     "evaluation.monitors",
     "evaluation.dataset_path",
+    "evaluation.suite_paths",
+    "evaluation.suite_ids",
+    "evaluation.policy_ids",
+    "evaluation.technique_ids",
+    "evaluation.transformation_ids",
+    "evaluation.repetitions",
+    "evaluation.judge_model",
+    "evaluation.judge_scorers",
+    "evaluation.max_expanded_trials",
     "evaluation.sample_count",
     "evaluation.temperature",
     "evaluation.max_tokens",
@@ -224,6 +290,10 @@ def _resolve_runtime_paths(config: AppConfig, config_path: Path) -> AppConfig:
     dataset = config.evaluation.dataset_path
     if not is_package_dataset(dataset):
         dataset = str(resolve_path_against_config(dataset, config_path))
+    suite_paths = [
+        str(resolve_path_against_config(path, config_path))
+        for path in config.evaluation.suite_paths
+    ]
     storage_path = str(resolve_path_against_config(config.storage.path, config_path))
     artifacts_root = str(resolve_path_against_config(config.artifacts.root, config_path))
     reporting_dir = str(resolve_path_against_config(config.reporting.output_dir, config_path))
@@ -232,7 +302,9 @@ def _resolve_runtime_paths(config: AppConfig, config_path: Path) -> AppConfig:
     return config.model_copy(
         update={
             "global_": config.global_.model_copy(update={"output_dir": output_dir}),
-            "evaluation": config.evaluation.model_copy(update={"dataset_path": dataset}),
+            "evaluation": config.evaluation.model_copy(
+                update={"dataset_path": dataset, "suite_paths": suite_paths}
+            ),
             "storage": config.storage.model_copy(update={"path": storage_path}),
             "artifacts": config.artifacts.model_copy(update={"root": artifacts_root}),
             "reporting": config.reporting.model_copy(update={"output_dir": reporting_dir}),
@@ -271,6 +343,8 @@ def _referenced_providers(config: AppConfig) -> set[str]:
     """Return provider names referenced by evaluation and generative model refs."""
     referenced: set[str] = set()
     refs: list[str] = list(config.evaluation.models)
+    if config.evaluation.judge_model:
+        refs.append(config.evaluation.judge_model)
     refs.extend(config.generative.target_models)
     refs.append(config.generative.generator_model)
     for model_ref in refs:
@@ -333,6 +407,11 @@ def validate_config(
             context,
         )
 
+    if config.evaluation.suite_ids or config.evaluation.suite_paths:
+        from cot_redteam.benchmark.validation import validate_benchmark_config
+
+        validate_benchmark_config(config)
+
     # Dataset accessibility (no provider network calls).
     Dataset.load_jsonl(config.evaluation.dataset_path)
 
@@ -352,7 +431,7 @@ def resolve_provider(
     if settings.api_key_env:
         value = env.get(settings.api_key_env)
         if not value:
-            if settings.kind in ("vllm", "llamacpp"):
+            if settings.kind in ("vllm", "llamacpp", "openai_compatible"):
                 api_key = None
             else:
                 raise ConfigurationError(
@@ -360,10 +439,12 @@ def resolve_provider(
                 )
         else:
             api_key = SecretStr(value)
-    elif settings.kind not in ("vllm", "llamacpp"):
+    elif settings.kind not in ("vllm", "llamacpp", "openai_compatible"):
         raise ConfigurationError(f"remote provider {provider_name!r} requires api_key_env")
 
-    base_url = settings.base_url or DEFAULT_BASE_URLS[settings.kind]
+    base_url = settings.base_url or DEFAULT_BASE_URLS.get(settings.kind)
+    if base_url is None:
+        raise ConfigurationError(f"provider {provider_name!r} requires base_url")
     return ResolvedProviderSettings(
         name=provider_name,
         kind=settings.kind,
@@ -377,6 +458,7 @@ def resolve_provider(
         headers=dict(settings.headers),
         input_price_per_million=settings.input_price_per_million,
         output_price_per_million=settings.output_price_per_million,
+        capabilities=settings.capabilities,
     )
 
 

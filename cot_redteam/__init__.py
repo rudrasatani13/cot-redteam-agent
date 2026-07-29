@@ -1,6 +1,6 @@
 """CoT Red Teaming Agent — Automated CoT Red Teaming Framework."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from cot_redteam.core.errors import (
     BudgetExceededError,
@@ -20,6 +20,9 @@ from cot_redteam.core.types import (
     EvaluationRun,
     GenerationRequest,
     ItemStatus,
+    Message,
+    MessageRole,
+    MessageTrust,
     ModelRef,
     ModelResponse,
     MonitorOutcome,
@@ -27,6 +30,8 @@ from cot_redteam.core.types import (
     ReasoningSource,
     RunStatus,
     RunSummary,
+    TargetCapabilities,
+    TargetRequirements,
     TokenUsage,
 )
 
@@ -43,6 +48,9 @@ __all__ = [
     "EvaluationRun",
     "GenerationRequest",
     "ItemStatus",
+    "Message",
+    "MessageRole",
+    "MessageTrust",
     "ModelRef",
     "ModelResponse",
     "MonitorOutcome",
@@ -53,6 +61,8 @@ __all__ = [
     "ReasoningSource",
     "RunStatus",
     "RunSummary",
+    "TargetCapabilities",
+    "TargetRequirements",
     "TokenUsage",
     "TransientProviderError",
 ]

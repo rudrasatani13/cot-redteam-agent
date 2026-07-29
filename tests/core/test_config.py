@@ -5,12 +5,26 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
-from cot_redteam.core.config import load_config, redacted_config, resolve_provider
+from cot_redteam.core.config import (
+    EvaluationSettings,
+    ProviderSettings,
+    load_config,
+    redacted_config,
+    resolve_provider,
+)
 from cot_redteam.core.errors import ConfigurationError
 from cot_redteam.core.serialization import canonical_json
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+
+
+def test_remote_and_generic_provider_require_explicit_connection_settings() -> None:
+    with pytest.raises(ValueError, match="requires api_key_env"):
+        ProviderSettings(kind="openai")
+    with pytest.raises(ValueError, match="require base_url"):
+        ProviderSettings(kind="openai_compatible")
 
 
 def test_load_config_rejects_unknown_keys() -> None:
@@ -223,3 +237,39 @@ def test_referenced_providers_helper() -> None:
     config = load_config(FIXTURES / "config" / "minimal.yaml")
     refs = _referenced_providers(config)
     assert "openrouter" in refs
+
+
+def test_benchmark_settings_are_additive_and_paths_resolve_from_config(
+    tmp_path: Path,
+) -> None:
+    source = FIXTURES / "config" / "minimal.yaml"
+    data = yaml.safe_load(source.read_text(encoding="utf-8"))
+    data["evaluation"].update(
+        {
+            "suite_paths": ["suites/core.jsonl"],
+            "suite_ids": ["suite.core"],
+            "policy_ids": ["policy.hierarchy"],
+            "technique_ids": ["technique.direct"],
+            "transformation_ids": ["transform.identity"],
+            "repetitions": 3,
+            "judge_model": "openrouter:judge/model",
+            "judge_scorers": ["judge.attack_goal"],
+            "max_expanded_trials": 500,
+        }
+    )
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    config = load_config(path)
+
+    assert config.evaluation.suite_paths == [str(tmp_path / "suites" / "core.jsonl")]
+    assert config.evaluation.repetitions == 3
+    assert config.evaluation.max_expanded_trials == 500
+
+
+def test_benchmark_repetitions_require_positive_value() -> None:
+    config = load_config(FIXTURES / "config" / "minimal.yaml")
+    with pytest.raises(ValueError, match="greater than or equal to 1"):
+        EvaluationSettings.model_validate(
+            {**config.evaluation.model_dump(mode="python"), "repetitions": 0}
+        )

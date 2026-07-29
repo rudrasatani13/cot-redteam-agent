@@ -61,7 +61,7 @@ jobs:
           python -m pip install -U pip build
           python -m pip install -e ".[dev]"
           python -m build
-          python -m pip install --force-reinstall --no-deps dist/cot_redteam_agent-0.2.0-py3-none-any.whl
+          python -m pip install --force-reinstall --no-deps dist/cot_redteam_agent-0.3.0-py3-none-any.whl
           cot-redteam --help
           SMOKE="$(mktemp -d)"
           cd "$SMOKE"
@@ -71,9 +71,13 @@ jobs:
           python - <<'PY'
           from cot_redteam.core.config import load_config
           from cot_redteam.eval.dataset import Dataset
+          from cot_redteam.benchmark.corpora import load_builtin_suite
           cfg = load_config("config.yaml")
           assert cfg.evaluation.dataset_path.startswith("pkg:") or "sample" in cfg.evaluation.dataset_path
           ds = Dataset.load_jsonl(cfg.evaluation.dataset_path)
           assert len(ds.samples) > 0
           print("wheel dataset ok", len(ds.samples))
+          assert len(load_builtin_suite("builtin.smoke").scenarios) == 12
+          assert len(load_builtin_suite("builtin.core").scenarios) == 56
+          print("wheel benchmark suites ok")
           PY

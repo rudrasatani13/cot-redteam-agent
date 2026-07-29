@@ -11,14 +11,24 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from cot_redteam import __version__
-from cot_redteam.api import run_evaluation
+from cot_redteam.api import run_benchmark, run_evaluation
 from cot_redteam.attacks.base import AttackRegistry
+from cot_redteam.benchmark.corpora import list_builtin_suites, load_builtin_suite
+from cot_redteam.benchmark.importers import (
+    import_cyberseceval_jsonl,
+    import_ih_challenge_jsonl,
+)
+from cot_redteam.benchmark.suite import ScenarioSuite
 from cot_redteam.core.config import load_config, redacted_config, validate_config
 from cot_redteam.core.errors import ConfigurationError, CotRedTeamError, PluginError
 from cot_redteam.core.serialization import canonical_json
 from cot_redteam.core.types import RunStatus
 from cot_redteam.monitors.base import MonitorRegistry
 from cot_redteam.plugins.bootstrap import bootstrap_plugins
+from cot_redteam.reporting.benchmark import (
+    BenchmarkReportFormat,
+    BenchmarkReportWriter,
+)
 from cot_redteam.reporting.report import ReportFormat, ReportWriter
 from cot_redteam.resources import read_example_config_text
 from cot_redteam.storage.sqlite import SQLiteRunStore
@@ -32,7 +42,7 @@ EXIT_PARTIAL = 3
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cot-redteam",
-        description="CoT Red Team Agent 0.2",
+        description="CoT Red Team Agent 0.3",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--debug", action="store_true", help="show full tracebacks")
@@ -52,6 +62,28 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("list-attacks", help="list registered attacks")
     sub.add_parser("list-monitors", help="list registered monitors")
     sub.add_parser("list-providers", help="list configured provider kinds")
+    sub.add_parser("list-suites", help="list packaged benchmark suites")
+
+    suite = sub.add_parser("suite", help="benchmark suite utilities")
+    suite_sub = suite.add_subparsers(dest="suite_command", required=True)
+    suite_validate = suite_sub.add_parser("validate", help="validate a JSONL suite")
+    suite_validate.add_argument("--path", required=True)
+    suite_validate.add_argument("--id", default="local.validation")
+    suite_show = suite_sub.add_parser("show", help="show a packaged suite")
+    suite_show.add_argument("--id", required=True)
+
+    dataset = sub.add_parser("dataset", help="offline dataset import utilities")
+    dataset_sub = dataset.add_subparsers(dest="dataset_command", required=True)
+    dataset_import = dataset_sub.add_parser("import", help="import external JSONL data")
+    dataset_import.add_argument(
+        "format",
+        choices=["cyberseceval", "ih-challenge"],
+    )
+    dataset_import.add_argument("--input", required=True)
+    dataset_import.add_argument("--output", required=True)
+    dataset_import.add_argument("--suite-id", required=True)
+    dataset_import.add_argument("--upstream-revision", required=True)
+    dataset_import.add_argument("--upstream-license", required=True)
 
     run_p = sub.add_parser("run", help="run evaluation")
     run_p.add_argument("--config", required=True)
@@ -71,7 +103,7 @@ def _build_parser() -> argparse.ArgumentParser:
     report.add_argument("--run-id", required=True)
     report.add_argument(
         "--format",
-        choices=["markdown", "csv", "latex"],
+        choices=["markdown", "csv", "jsonl", "latex"],
         default="markdown",
     )
     report.add_argument("--output-dir", default=None)
@@ -128,6 +160,87 @@ def cmd_list_providers(args: argparse.Namespace) -> int:
     print("anthropic")
     print("vllm")
     print("llamacpp")
+    print("openai_compatible")
+    return EXIT_OK
+
+
+def cmd_list_suites(_: argparse.Namespace) -> int:
+    for suite in list_builtin_suites():
+        malicious = sum("malicious" in scenario.tags for scenario in suite.scenarios)
+        controls = sum("benign_control" in scenario.tags for scenario in suite.scenarios)
+        print(
+            f"{suite.id}\tscenarios={len(suite.scenarios)}\t"
+            f"malicious={malicious}\tcontrols={controls}\tdigest={suite.digest}"
+        )
+    return EXIT_OK
+
+
+def cmd_suite_validate(args: argparse.Namespace) -> int:
+    suite = ScenarioSuite.load_jsonl(args.path, suite_id=args.id)
+    print(f"suite valid: id={suite.id} scenarios={len(suite.scenarios)} digest={suite.digest}")
+    return EXIT_OK
+
+
+def cmd_suite_show(args: argparse.Namespace) -> int:
+    suite = load_builtin_suite(args.id)
+    print(
+        json.dumps(
+            {
+                "id": suite.id,
+                "digest": suite.digest,
+                "path": suite.path,
+                "scenarios": [
+                    {
+                        "id": scenario.id,
+                        "title": scenario.title,
+                        "family": scenario.family,
+                        "channel": scenario.channel,
+                        "objective": scenario.objective.type,
+                    }
+                    for scenario in suite.scenarios
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return EXIT_OK
+
+
+def cmd_dataset_import(args: argparse.Namespace) -> int:
+    kwargs = {
+        "suite_id": args.suite_id,
+        "upstream_revision": args.upstream_revision,
+        "upstream_license": args.upstream_license,
+    }
+    if args.format == "cyberseceval":
+        result = import_cyberseceval_jsonl(args.input, **kwargs)
+    else:
+        result = import_ih_challenge_jsonl(args.input, **kwargs)
+    output = Path(args.output)
+    manifest_path = output.with_suffix(output.suffix + ".manifest.json")
+    existing = [path for path in (output, manifest_path) if path.exists()]
+    if existing:
+        raise ConfigurationError(
+            "refusing to overwrite existing file(s): " + ", ".join(str(path) for path in existing)
+        )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        "\n".join(
+            canonical_json(scenario.model_dump(mode="python"))
+            for scenario in result.suite.scenarios
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest_path.write_text(
+        json.dumps(result.manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    print(
+        f"imported={result.summary.imported} rejected={result.summary.rejected} "
+        f"suite={output} manifest={manifest_path}"
+    )
     return EXIT_OK
 
 
@@ -139,15 +252,28 @@ async def _run_async(args: argparse.Namespace) -> int:
         overrides["global.seed"] = args.seed
     config = load_config(args.config, overrides=overrides or None)
     validate_config(config, require_credentials=True)
-    run = await run_evaluation(config)
+    if config.evaluation.suite_ids or config.evaluation.suite_paths:
+        benchmark_run = await run_benchmark(config)
+        completed = sum(
+            result.transcript.status.value == "completed" for result in benchmark_run.trials
+        )
+        print(
+            f"run_id={benchmark_run.run_id} type=benchmark "
+            f"planned={len(benchmark_run.trials)} "
+            f"completed={completed} failed={len(benchmark_run.trials) - completed}"
+        )
+        return EXIT_OK if completed == len(benchmark_run.trials) else EXIT_PARTIAL
+    legacy_run = await run_evaluation(config)
     print(
-        f"run_id={run.run_id} status={run.status.value} "
-        f"planned={run.summary.planned} succeeded={run.summary.succeeded} "
-        f"failed={run.summary.failed} cancelled={run.summary.cancelled}"
+        f"run_id={legacy_run.run_id} status={legacy_run.status.value} "
+        f"planned={legacy_run.summary.planned} "
+        f"succeeded={legacy_run.summary.succeeded} "
+        f"failed={legacy_run.summary.failed} "
+        f"cancelled={legacy_run.summary.cancelled}"
     )
-    if run.status is RunStatus.COMPLETED:
+    if legacy_run.status is RunStatus.COMPLETED:
         return EXIT_OK
-    if run.status is RunStatus.PARTIAL:
+    if legacy_run.status is RunStatus.PARTIAL:
         return EXIT_PARTIAL
     return EXIT_FAILED
 
@@ -165,6 +291,8 @@ def cmd_list_runs(args: argparse.Namespace) -> int:
                 f"succeeded={row['summary'].get('succeeded')}/"
                 f"{row['summary'].get('planned')}"
             )
+        for row in store.list_benchmark_runs(limit=args.limit):
+            print(f"{row['run_id']}\tbenchmark\ttrials={row['trials']}")
     return EXIT_OK
 
 
@@ -173,8 +301,25 @@ def cmd_show_run(args: argparse.Namespace) -> int:
     with SQLiteRunStore(config.storage.path) as store:
         run = store.get(args.run_id)
         if run is None:
-            print(f"run not found: {args.run_id}", file=sys.stderr)
-            return EXIT_CONFIG
+            benchmark = store.get_benchmark(args.run_id)
+            if benchmark is None:
+                print(f"run not found: {args.run_id}", file=sys.stderr)
+                return EXIT_CONFIG
+            print(
+                json.dumps(
+                    {
+                        "run_id": benchmark.run_id,
+                        "type": "benchmark",
+                        "trials": len(benchmark.trials),
+                        "completed": sum(
+                            result.transcript.status.value == "completed"
+                            for result in benchmark.trials
+                        ),
+                    },
+                    indent=2,
+                )
+            )
+            return EXIT_OK
         print(
             json.dumps(
                 {
@@ -200,7 +345,19 @@ def cmd_report(args: argparse.Namespace) -> int:
     with SQLiteRunStore(config.storage.path) as store:
         run = store.get(args.run_id)
         if run is None:
-            print(f"run not found: {args.run_id}", file=sys.stderr)
+            benchmark = store.get_benchmark(args.run_id)
+            if benchmark is None:
+                print(f"run not found: {args.run_id}", file=sys.stderr)
+                return EXIT_CONFIG
+            output_dir = args.output_dir or config.reporting.output_dir
+            path = BenchmarkReportWriter(output_dir).write(
+                benchmark,
+                BenchmarkReportFormat(args.format),
+            )
+            print(str(path))
+            return EXIT_OK
+        if args.format == "jsonl":
+            print("jsonl reports are available only for benchmark runs", file=sys.stderr)
             return EXIT_CONFIG
         manifest = store.get_manifest(args.run_id) or {}
         output_dir = args.output_dir or config.reporting.output_dir
@@ -295,6 +452,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "list-attacks": cmd_list_attacks,
         "list-monitors": cmd_list_monitors,
         "list-providers": cmd_list_providers,
+        "list-suites": cmd_list_suites,
         "run": cmd_run,
         "list-runs": cmd_list_runs,
         "show-run": cmd_show_run,
@@ -308,6 +466,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.config_command == "show":
                 return cmd_config_show(args)
             parser.error("unknown config command")
+        if args.command == "suite":
+            if args.suite_command == "validate":
+                return cmd_suite_validate(args)
+            if args.suite_command == "show":
+                return cmd_suite_show(args)
+            parser.error("unknown suite command")
+        if args.command == "dataset":
+            if args.dataset_command == "import":
+                return cmd_dataset_import(args)
+            parser.error("unknown dataset command")
         handler = handlers.get(args.command)
         if handler is None:
             parser.error(f"unknown command {args.command}")

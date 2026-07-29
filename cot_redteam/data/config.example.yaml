@@ -1,4 +1,4 @@
-# CoT Red Team Agent 0.2 example configuration
+# CoT Red Team Agent 0.3 example configuration
 # Credentials come from environment variables named below — never commit secrets.
 
 version: 2
@@ -17,9 +17,6 @@ providers:
     timeout: 120
     max_retries: 3
     concurrency: 4
-    aliases:
-      sonnet: anthropic/claude-3.5-sonnet
-      gpt4o: openai/gpt-4o
 
   openai:
     kind: openai
@@ -53,7 +50,7 @@ providers:
 
 evaluation:
   models:
-    - openrouter:anthropic/claude-3.5-sonnet
+    - openrouter:replace-with-model-id
   attacks:
     - injection.system_canary
   monitors:
@@ -61,6 +58,12 @@ evaluation:
   # Packaged sample dataset (works from installed wheels). Override with a local path if needed.
   dataset_path: pkg:sample.jsonl
   sample_count: 3
+  # To run the v0.3 benchmark instead of legacy attacks, remove attacks/monitors
+  # above and enable one or more suites. The smoke suite uses 13 target requests
+  # per model at one repetition. Incompatible trials fail before requests.
+  # suite_ids:
+  #   - builtin.smoke
+  # repetitions: 1
   temperature: 0.7
   max_tokens: 2048
   cot_delimiters:
@@ -90,9 +93,9 @@ reporting:
   output_dir: ./results/reports
 
 generative:
-  generator_model: openrouter:anthropic/claude-3.5-sonnet
+  generator_model: openrouter:replace-with-model-id
   target_models:
-    - openrouter:anthropic/claude-3.5-sonnet
+    - openrouter:replace-with-model-id
   evolution_rounds: 2
   population_size: 3
   max_generation_attempts: 10
