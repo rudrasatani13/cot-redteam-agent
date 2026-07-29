@@ -494,6 +494,153 @@ async def test_agentic_loop_invents_after_seed_fails() -> None:
     assert history[1]["invented"] is True
 
 
+class _AgenticDefaultCapAttack(_AgenticAttack):
+    """Agentic with no max_attempts → engine uses the default 24 cap."""
+
+    metadata = PluginMetadata(
+        id="test.agentic_default_cap",
+        version="1.0.0",
+        description="agentic default max_attempts",
+    )
+
+    @property
+    def max_attempts(self) -> int | None:  # type: ignore[override]
+        return None
+
+    def next_prompt_after_failure(self, sample, history, *, max_attempts=None):
+        # Immediately stop inventing so the run finishes after the seed fail.
+        del sample, history, max_attempts
+        return None
+
+    def assess(self, sample, prompt, response) -> AttackAssessment:
+        del sample, prompt, response
+        return AttackAssessment(success=False, score=0.0, explanation="[defense=hard_refuse]")
+
+
+class _SoftErrorMonitor(BaseMonitor):
+    """Returns ERROR status without raising (distinct from exception path)."""
+
+    metadata = PluginMetadata(id="test.soft_err_monitor", version="1.0.0", description="soft err")
+
+    async def evaluate(self, prompt, response) -> MonitorOutcome:
+        del prompt, response
+        return MonitorOutcome(
+            monitor_id=self.metadata.id,
+            status=MonitorStatus.ERROR,
+            confidence=0.0,
+            explanation="soft error",
+        )
+
+
+class _EmptyPromptAttack(BaseAttack):
+    metadata = PluginMetadata(id="test.empty_prompts", version="1.0.0", description="empty")
+
+    def create_prompt(self, sample: DatasetSample) -> AttackPrompt:
+        raise RuntimeError("unused")
+
+    def create_prompts(self, sample: DatasetSample):
+        del sample
+        return ()
+
+    def assess(self, sample, prompt, response) -> AttackAssessment:
+        del sample, prompt, response
+        return AttackAssessment(success=False, score=0.0)
+
+
+@pytest.mark.asyncio
+async def test_agentic_default_max_attempts_and_no_invent() -> None:
+    AttackRegistry.register(
+        _AgenticDefaultCapAttack.metadata,
+        lambda config, context: _AgenticDefaultCapAttack(config),
+    )
+    provider = _CountingProvider()
+    factory = _CountingFactory(provider)
+    engine = EvaluationEngine(
+        factory, AttackRegistry, MonitorRegistry, BudgetTracker(BudgetSettings()), concurrency=1
+    )
+    sample = DatasetSample(id="s1", question="q")
+    model = ModelRef.parse("fake:m")
+    plan = RunPlan(
+        run_id="run-agentic-cap",
+        seed=1,
+        models=(model,),
+        attack_ids=("test.agentic_default_cap",),
+        monitor_ids=("test.ok_monitor",),
+        samples=(sample,),
+        items=(
+            PlannedItem(
+                item_id="item-0",
+                model=model,
+                attack_id="test.agentic_default_cap",
+                sample=sample,
+            ),
+        ),
+        dataset_digest="d",
+        temperature=0.0,
+        max_tokens=16,
+        cot_delimiters=("<think>", "</think>"),
+    )
+    run = await engine.run(plan)
+    assert run.items[0].status is ItemStatus.SUCCEEDED
+    assert run.items[0].assessment is not None
+    assert run.items[0].assessment.success is False
+    assert provider.n == 1
+    assert run.items[0].prompt is not None
+    # No max_attempts on agentic attack → engine default cap of 24.
+    assert run.items[0].prompt.metadata["attempts_total"] == 24
+
+
+@pytest.mark.asyncio
+async def test_monitor_error_status_not_exception() -> None:
+    MonitorRegistry.register(
+        _SoftErrorMonitor.metadata,
+        lambda config, context: _SoftErrorMonitor(config, context=context),
+    )
+    factory = FakeFactory(FakeProvider("ok"))
+    engine = EvaluationEngine(
+        factory, AttackRegistry, MonitorRegistry, BudgetTracker(BudgetSettings()), concurrency=1
+    )
+    run = await engine.run(_plan(monitor_ids=("test.soft_err_monitor",)))
+    assert run.items[0].status is ItemStatus.MONITOR_ERROR
+
+
+@pytest.mark.asyncio
+async def test_empty_prompts_is_attack_error() -> None:
+    AttackRegistry.register(
+        _EmptyPromptAttack.metadata,
+        lambda config, context: _EmptyPromptAttack(config),
+    )
+    factory = FakeFactory(FakeProvider("ok"))
+    engine = EvaluationEngine(
+        factory, AttackRegistry, MonitorRegistry, BudgetTracker(BudgetSettings()), concurrency=1
+    )
+    sample = DatasetSample(id="s1", question="q")
+    model = ModelRef.parse("fake:m")
+    plan = RunPlan(
+        run_id="run-empty",
+        seed=1,
+        models=(model,),
+        attack_ids=("test.empty_prompts",),
+        monitor_ids=("test.ok_monitor",),
+        samples=(sample,),
+        items=(
+            PlannedItem(
+                item_id="item-0",
+                model=model,
+                attack_id="test.empty_prompts",
+                sample=sample,
+            ),
+        ),
+        dataset_digest="d",
+        temperature=0.0,
+        max_tokens=16,
+        cot_delimiters=("<think>", "</think>"),
+    )
+    run = await engine.run(plan)
+    assert run.items[0].status is ItemStatus.ATTACK_ERROR
+    assert "zero prompts" in (run.items[0].error or "")
+
+
 @pytest.mark.asyncio
 async def test_adaptive_loop_stops_on_first_real_success() -> None:
     AttackRegistry.register(
