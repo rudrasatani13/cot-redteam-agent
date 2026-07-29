@@ -27,7 +27,7 @@ try:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
     from textual.containers import Horizontal, Vertical
-    from textual.widgets import Footer, Header, Input, Static
+    from textual.widgets import Header, Input, Static
 
     TEXTUAL_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -54,7 +54,8 @@ if TEXTUAL_AVAILABLE:
         """Interactive multi-model adaptive red-team dashboard."""
 
         CSS = """
-        /* Flex layout: mid (timeline|output) eats remaining height; input always visible */
+        /* No Textual Footer — it docks and eats the input row.
+           Bottom chrome is a fixed 4-row block: keys + type line. */
         Screen {
             layout: vertical;
             background: #0b0f14;
@@ -65,27 +66,22 @@ if TEXTUAL_AVAILABLE:
             text-style: bold;
             height: 1;
         }
-        Footer {
-            background: #111827;
-            color: #9ca3af;
-            height: 1;
-        }
         #body {
             height: 1fr;
             layout: vertical;
             min-height: 0;
-            padding: 0 1;
+            padding: 0 1 0 1;
             background: #0b0f14;
         }
         #hdr {
             height: auto;
-            min-height: 5;
-            max-height: 7;
+            min-height: 4;
+            max-height: 6;
         }
         #models {
             height: auto;
-            min-height: 4;
-            max-height: 7;
+            min-height: 3;
+            max-height: 6;
         }
         #now {
             height: 1;
@@ -96,63 +92,82 @@ if TEXTUAL_AVAILABLE:
         }
         #mid {
             height: 1fr;
-            min-height: 8;
+            min-height: 6;
             layout: horizontal;
         }
         #timeline {
             width: 1fr;
             height: 1fr;
-            min-width: 20;
+            min-width: 16;
             overflow-y: auto;
             overflow-x: hidden;
         }
         #output {
             width: 1fr;
             height: 1fr;
-            min-width: 20;
+            min-width: 16;
             overflow-y: auto;
             overflow-x: hidden;
         }
         #leak {
             height: auto;
             min-height: 3;
-            max-height: 5;
+            max-height: 4;
+        }
+        /* Fixed bottom bar — NEVER overlapped */
+        #bottom {
+            height: 4;
+            min-height: 4;
+            max-height: 4;
+            layout: vertical;
+            background: #020617;
+            border-top: heavy #22d3ee;
+            padding: 0 1;
+        }
+        #keys-bar {
+            height: 1;
+            min-height: 1;
+            max-height: 1;
+            color: #94a3b8;
+            background: #020617;
+            content-align: left middle;
+            text-style: none;
         }
         #command-row {
             height: 3;
             min-height: 3;
             max-height: 3;
-            background: #0f172a;
-            border-top: heavy #22d3ee;
+            layout: horizontal;
+            background: #020617;
             align: left middle;
-            padding: 0;
+        }
+        #cmd-label {
+            width: 3;
+            height: 3;
+            color: #22d3ee;
+            text-style: bold;
+            content-align: center middle;
+            background: #020617;
         }
         #command {
             width: 1fr;
             height: 3;
-            background: #111827;
-            color: #f9fafb;
+            background: #0f172a;
+            color: #f8fafc;
             border: tall #22d3ee;
             padding: 0 1;
         }
         #command:focus {
-            border: tall #67e8f9;
-            background: #0b1220;
-            color: #f8fafc;
-        }
-        #cmd-label {
-            color: #22d3ee;
-            text-style: bold;
-            width: 3;
-            height: 3;
-            content-align: center middle;
+            border: tall #a5f3fc;
+            background: #164e63;
+            color: #ffffff;
         }
         #cmd-hint {
-            width: auto;
-            color: #6b7280;
+            width: 10;
             height: 3;
-            content-align: right middle;
-            padding: 0 1;
+            color: #67e8f9;
+            content-align: center middle;
+            background: #020617;
         }
         """
 
@@ -200,8 +215,8 @@ if TEXTUAL_AVAILABLE:
 
         def compose(self) -> ComposeResult:
             # Header
-            # body: hdr | models | now | mid(timeline|output 1fr) | leak | command
-            # Footer
+            # body (flex): hdr | models | now | mid | leak
+            # bottom (fixed 4 rows): keys + type line  ← always fully visible
             yield Header(show_clock=True)
             with Vertical(id="body"):
                 yield Static(id="hdr")
@@ -211,14 +226,18 @@ if TEXTUAL_AVAILABLE:
                     yield Static(id="timeline")
                     yield Static(id="output")
                 yield Static(id="leak")
+            with Vertical(id="bottom"):
+                yield Static(
+                    " F5 Run   ·   F1 Help   ·   Ctrl+L Clear   ·   Ctrl+C Quit   ·   type /run then Enter",
+                    id="keys-bar",
+                )
                 with Horizontal(id="command-row"):
                     yield Static("❯", id="cmd-label")
                     yield Input(
-                        placeholder="type here:  /run   |   /help  /model provider:id  /stop  /quit",
+                        placeholder="/run",
                         id="command",
                     )
-                    yield Static("Enter ↵", id="cmd-hint")
-            yield Footer()
+                    yield Static("Enter", id="cmd-hint")
 
         def on_mount(self) -> None:
             self.title = "CoT Red Team"
