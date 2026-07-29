@@ -1,10 +1,11 @@
 """
 Faithfulness attacks package.
 """
+
 from cot_redteam.attacks.faithfulness.attacks import (
-    UnfaithfulCoTDetection,
-    CoTHallucinationDetection,
     CoTConsistencyCheck,
+    CoTHallucinationDetection,
+    UnfaithfulCoTDetection,
 )
 
 __all__ = [

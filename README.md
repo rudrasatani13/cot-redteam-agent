@@ -1,84 +1,113 @@
-# CoT Red Teaming Agent
+# CoT Red Team Agent 0.2
 
-Automated, research-grade **Chain-of-Thought (CoT) Red Teaming** framework for finding vulnerabilities in LLM reasoning.
+Open-source CLI and Python API for **Chain-of-Thought red-team evaluation**.
+You supply provider credentials; the tool runs attacks and monitors, records
+failure-aware outcomes, and writes truthful reports.
 
-## Features
+This is an intentional breaking release from `0.1.x`. See
+[docs/migration-0.1-to-0.2.md](docs/migration-0.1-to-0.2.md).
 
-- **8 Attack Categories**: Injection, Faithfulness, Steganography, Manipulation, Sandbagging, Evasion, Distillation, Generative
-- **5+ Model Adapters**: OpenRouter, OpenAI, Anthropic, vLLM, llama.cpp
-- **3+ Monitors**: Regex (basic + weighted), LLM-as-Judge, Ensemble/Cascading
-- **Generative Attack Engine**: LLM-generated novel attacks with evolutionary optimization
-- **Evasion Testing**: Test attacks against multiple monitors simultaneously
-- **Reproducible**: Seed locking, artifact hashing, config snapshots, version pinning
-- **Paper-Ready Output**: LaTeX/Markdown/CSV tables with statistical significance tests
-- **Model Watcher**: Auto-detect new models on HuggingFace and OpenRouter
-- **SQLite + Parquet Storage**: Queryable results storage with comparison tools
-
-## Quick Start
+## Install
 
 ```bash
-# Install
-pip install -e .
+# test: command
+python -m pip install -e ".[dev]"
+```
 
-# List attacks
+Or from a built wheel:
+
+```bash
+python -m pip install dist/cot_redteam_agent-0.2.0-py3-none-any.whl
+```
+
+Requires Python 3.10–3.13.
+
+## Five-minute quickstart
+
+```bash
+# test: command
+cot-redteam init --path config.yaml
+export OPENROUTER_API_KEY=your-key
+cot-redteam config validate --config config.yaml
+# cot-redteam run --config config.yaml   # contacts providers
 cot-redteam list-attacks
-
-# Run evaluation
-cot-redteam run \
-  --model openrouter:anthropic/claude-3.5-sonnet \
-  --dataset cot_redteam/eval/datasets/sample.jsonl \
-  --num-samples 5 \
-  --verbose
-
-# Show results
-cot-redteam list-runs
-cot-redteam show-run <run_id>
-cot-redteam report <run_id> --format markdown
+cot-redteam list-monitors
 ```
 
-## Architecture
+`config.example.yaml` (copied by `init`) configures OpenRouter, OpenAI,
+Anthropic, vLLM, and llama.cpp **without embedding secrets**. Remote providers
+read credentials only from named environment variables.
 
+## What 0.2 guarantees
+
+- Strict YAML configuration (`version: 2`) with unknown-key rejection
+- Stable plugin IDs for attacks and monitors
+- Asynchronous providers with retries and lifecycle close
+- Explicit item statuses: success, provider/attack/monitor error, budget, cancel
+- Monitor `ERROR` / `NOT_RUN` never count as successful evasion
+- Transactional SQLite storage and content-addressed artifacts
+- Markdown, CSV, and LaTeX reports with eligibility denominators
+- Bounded generative attack evolution (no infinite loops, no code execution)
+
+## Visible reasoning
+
+The tool only records **visible** reasoning from:
+
+1. provider-exposed reasoning fields, or
+2. explicit delimiter pairs such as `<think>...</think>`.
+
+Ordinary answer text that contains words like “because” is **not** labeled as
+reasoning. Automated monitors are **not** ground truth.
+
+## Python API
+
+```python
+# test: python
+import asyncio
+from cot_redteam.core.config import load_config
+from cot_redteam.api import run_evaluation
+
+async def main():
+    config = load_config("config.example.yaml")
+    # run = await run_evaluation(config)  # requires credentials + network
+    assert config.version == 2
+
+asyncio.run(main())
 ```
-cot-redteam-agent/
-├── cot_redteam/
-│   ├── core/           # Types, config
-│   ├── attacks/        # 8 attack categories with plugin registry
-│   │   ├── injection/      # CoT injection, roleplay injection
-│   │   ├── faithfulness/   # Unfaithful CoT, hallucination detection
-│   │   ├── steganography/  # Hidden CoT, encoding, watermarking
-│   │   ├── manipulation/   # Path forcing, circular reasoning, fallacy injection
-│   │   ├── sandbagging/   # Capability hiding, selective competence
-│   │   ├── evasion/        # Monitor awareness, stealth reasoning
-│   │   ├── distillation/  # CoT extraction via distillation
-│   │   └── generative/    # LLM-generated novel attacks (evolutionary)
-│   ├── models/         # Model adapters (OpenRouter, OpenAI, Anthropic, vLLM, llama.cpp)
-│   ├── monitors/        # CoT monitors + evasion testing framework
-│   ├── eval/           # Eval harness, datasets, metrics, artifacts
-│   ├── scheduler/      # Model watcher (HF/OpenRouter)
-│   ├── storage/        # SQLite results store
-│   ├── reporting/      # Paper-ready reports
-│   └── cli/           # CLI tool
-├── config.yaml          # Full configuration
-└── pyproject.toml
+
+## CLI commands
+
+- `cot-redteam init`
+- `cot-redteam config validate|show`
+- `cot-redteam list-attacks|list-monitors|list-providers`
+- `cot-redteam run`
+- `cot-redteam list-runs|show-run|report`
+- `cot-redteam evolve`
+
+Exit codes: `0` completed, `1` failed, `2` configuration, `3` partial.
+
+## Documentation
+
+| Guide | Path |
+|---|---|
+| Configuration | [docs/configuration.md](docs/configuration.md) |
+| Providers | [docs/providers.md](docs/providers.md) |
+| Plugins | [docs/plugins.md](docs/plugins.md) |
+| Experiments | [docs/experiments.md](docs/experiments.md) |
+| Migration | [docs/migration-0.1-to-0.2.md](docs/migration-0.1-to-0.2.md) |
+| Release checklist | [docs/release-checklist.md](docs/release-checklist.md) |
+
+## Development
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+pytest
+ruff check .
+mypy cot_redteam
 ```
-
-## Attack Categories
-
-| Category | Attacks | Description |
-|----------|---------|-------------|
-| Injection | 3 | Hijack CoT with injected instructions |
-| Faithfulness | 3 | Detect unfaithful/hallucinated CoT |
-| Steganography | 3 | Hidden CoT, encoding, watermarking |
-| Manipulation | 4 | Force wrong reasoning paths, fallacy injection |
-| Sandbagging | 3 | Detect capability hiding |
-| Evasion | 4 | Bypass CoT monitoring |
-| Distillation | 2 | Extract proprietary CoT patterns |
-| Generative | 1+ | LLM-generated novel attacks with evolution |
-
-## Configuration
-
-See `config.yaml` for full configuration options.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

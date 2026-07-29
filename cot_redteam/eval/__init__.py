@@ -1,12 +1,14 @@
-"""
-Eval package.
-"""
-from cot_redteam.eval.harness import EvalHarness, RunConfig, DatasetLoader, MetricsCalculator, ArtifactManager
+"""Evaluation package."""
+
+from cot_redteam.eval.dataset import Dataset
+from cot_redteam.eval.engine import EvaluationEngine
+from cot_redteam.eval.metrics import summarize_run
+from cot_redteam.eval.planner import RunPlan, RunPlanner
 
 __all__ = [
-    "EvalHarness",
-    "RunConfig",
-    "DatasetLoader",
-    "MetricsCalculator",
-    "ArtifactManager",
+    "Dataset",
+    "EvaluationEngine",
+    "RunPlan",
+    "RunPlanner",
+    "summarize_run",
 ]

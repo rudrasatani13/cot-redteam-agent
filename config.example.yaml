@@ -1,0 +1,107 @@
+# CoT Red Team Agent 0.2 example configuration
+# Credentials come from environment variables named below — never commit secrets.
+
+version: 2
+
+global:
+  seed: 42
+  log_level: INFO
+  output_dir: ./results
+  concurrency: 4
+
+providers:
+  openrouter:
+    kind: openrouter
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    timeout: 120
+    max_retries: 3
+    concurrency: 4
+    aliases:
+      sonnet: anthropic/claude-3.5-sonnet
+      gpt4o: openai/gpt-4o
+
+  openai:
+    kind: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    timeout: 120
+    max_retries: 3
+    concurrency: 4
+
+  anthropic:
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    timeout: 120
+    max_retries: 3
+    concurrency: 4
+
+  vllm:
+    kind: vllm
+    base_url: http://localhost:8000/v1
+    timeout: 300
+    max_retries: 2
+    concurrency: 2
+
+  llamacpp:
+    kind: llamacpp
+    base_url: http://localhost:8080/v1
+    timeout: 300
+    max_retries: 2
+    concurrency: 2
+
+evaluation:
+  models:
+    - openrouter:anthropic/claude-3.5-sonnet
+  attacks:
+    - injection.cot_injection
+  monitors:
+    - regex
+  dataset_path: cot_redteam/eval/datasets/sample.jsonl
+  sample_count: 3
+  temperature: 0.7
+  max_tokens: 2048
+  cot_delimiters:
+    - "<think>"
+    - "</think>"
+    - "<reasoning>"
+    - "</reasoning>"
+  budgets:
+    max_requests: 100
+    max_elapsed_seconds: 600
+  retain_prompts: true
+  retain_responses: true
+  retain_reasoning: true
+  monitor_config:
+    regex:
+      patterns: []
+
+artifacts:
+  root: ./artifacts
+  save_prompts: true
+  save_responses: true
+  save_reasoning: true
+
+storage:
+  path: ./results/cot_redteam.db
+
+reporting:
+  formats:
+    - markdown
+  output_dir: ./results/reports
+
+generative:
+  generator_model: openrouter:anthropic/claude-3.5-sonnet
+  target_models:
+    - openrouter:anthropic/claude-3.5-sonnet
+  evolution_rounds: 2
+  population_size: 3
+  max_generation_attempts: 10
+  mutation_rate: 0.3
+  crossover_rate: 0.5
+  fitness_weights:
+    attack_success: 0.4
+    evasion: 0.4
+    novelty: 0.2
+  archive_path: ./results/generative_archive.json

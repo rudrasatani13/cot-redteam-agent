@@ -1,33 +1,58 @@
-"""
-CoT Red Teaming Agent — Automated CoT Red Teaming Framework.
-"""
-__version__ = "0.1.0"
+"""CoT Red Teaming Agent — Automated CoT Red Teaming Framework."""
 
-from cot_redteam.core import (
-    AttackCategory,
-    ModelProvider,
-    MonitorType,
-    ModelConfig,
-    AttackResult,
-    MonitorResult,
-    EvalResult,
+__version__ = "0.2.0"
+
+from cot_redteam.core.errors import (
+    BudgetExceededError,
+    ConfigurationError,
+    CotRedTeamError,
+    PermanentProviderError,
+    PluginError,
+    ProviderError,
+    TransientProviderError,
 )
-from cot_redteam.attacks import BaseAttack, AttackRegistry
-from cot_redteam.models import BaseModel, ModelRegistry
-from cot_redteam.monitors import BaseMonitor, MonitorRegistry
+from cot_redteam.core.types import (
+    AttackAssessment,
+    AttackCategory,
+    AttackPrompt,
+    DatasetSample,
+    EvaluationItem,
+    EvaluationRun,
+    GenerationRequest,
+    ItemStatus,
+    ModelRef,
+    ModelResponse,
+    MonitorOutcome,
+    MonitorStatus,
+    ReasoningSource,
+    RunStatus,
+    RunSummary,
+    TokenUsage,
+)
 
 __all__ = [
+    "__version__",
+    "AttackAssessment",
     "AttackCategory",
-    "ModelProvider",
-    "MonitorType",
-    "ModelConfig",
-    "AttackResult",
-    "MonitorResult",
-    "EvalResult",
-    "BaseAttack",
-    "AttackRegistry",
-    "BaseModel",
-    "ModelRegistry",
-    "BaseMonitor",
-    "MonitorRegistry",
+    "AttackPrompt",
+    "BudgetExceededError",
+    "ConfigurationError",
+    "CotRedTeamError",
+    "DatasetSample",
+    "EvaluationItem",
+    "EvaluationRun",
+    "GenerationRequest",
+    "ItemStatus",
+    "ModelRef",
+    "ModelResponse",
+    "MonitorOutcome",
+    "MonitorStatus",
+    "PermanentProviderError",
+    "PluginError",
+    "ProviderError",
+    "ReasoningSource",
+    "RunStatus",
+    "RunSummary",
+    "TokenUsage",
+    "TransientProviderError",
 ]

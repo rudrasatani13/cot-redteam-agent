@@ -1,6 +1,21 @@
-"""
-Generative attacks package.
-"""
-from cot_redteam.attacks.generative.engine import GenerativeAttackEngine, GenerativeAttack
+"""Generative attack package."""
 
-__all__ = ["GenerativeAttackEngine", "GenerativeAttack"]
+from cot_redteam.attacks.generative.engine import (
+    AttackCandidate,
+    AttackSpec,
+    GenerationResult,
+    GenerativeAttackEngine,
+    GenerativeEvolvedAttack,
+    lexical_novelty,
+    parse_attack_spec,
+)
+
+__all__ = [
+    "AttackCandidate",
+    "AttackSpec",
+    "GenerationResult",
+    "GenerativeAttackEngine",
+    "GenerativeEvolvedAttack",
+    "lexical_novelty",
+    "parse_attack_spec",
+]

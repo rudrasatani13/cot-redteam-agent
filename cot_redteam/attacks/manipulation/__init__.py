@@ -1,11 +1,12 @@
 """
 Manipulation attacks package.
 """
+
 from cot_redteam.attacks.manipulation.attacks import (
-    ReasoningPathForcing,
     CircularReasoningAttack,
     LogicalFallacyInjection,
     PremiseInjectionAttack,
+    ReasoningPathForcing,
 )
 
 __all__ = [

@@ -1,10 +1,11 @@
 """
 Steganography attacks package.
 """
+
 from cot_redteam.attacks.steganography.attacks import (
-    SteganographicCoTAttack,
-    CoTWatermarkingAttack,
     CoTHiddenReasoningAttack,
+    CoTWatermarkingAttack,
+    SteganographicCoTAttack,
 )
 
 __all__ = [

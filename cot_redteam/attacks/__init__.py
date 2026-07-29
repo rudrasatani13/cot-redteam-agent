@@ -1,9 +1,5 @@
-"""
-Attacks package - auto-discovers all attack modules.
-"""
-from cot_redteam.attacks.base import BaseAttack, AttackRegistry, auto_discover_attacks
+"""Attack plugins."""
 
-# Auto-discover on import
-auto_discover_attacks()
+from cot_redteam.attacks.base import AttackRegistry, BaseAttack, register_attack
 
-__all__ = ["BaseAttack", "AttackRegistry"]
+__all__ = ["AttackRegistry", "BaseAttack", "register_attack"]

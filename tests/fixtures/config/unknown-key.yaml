@@ -1,0 +1,13 @@
+version: 2
+unexpected: true
+providers:
+  openrouter:
+    kind: openrouter
+    api_key_env: OPENROUTER_API_KEY
+evaluation:
+  models:
+    - openrouter:test/model
+  attacks:
+    - injection.cot_injection
+  monitors:
+    - regex
