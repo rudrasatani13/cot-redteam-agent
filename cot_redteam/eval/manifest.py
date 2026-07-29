@@ -9,6 +9,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
+from cot_redteam.benchmark.policies import BUILTIN_POLICIES
+from cot_redteam.benchmark.results import BenchmarkRunResult
+from cot_redteam.benchmark.scoring import SCORER_VERSION
+from cot_redteam.benchmark.techniques import TECHNIQUE_VERSION
+from cot_redteam.benchmark.transforms import TRANSFORM_VERSION
 from cot_redteam.core.config import AppConfig, redacted_config
 from cot_redteam.core.serialization import canonical_json, sha256_text
 from cot_redteam.core.types import EvaluationRun, JsonValue
@@ -139,3 +144,109 @@ def build_manifest(
     }
     manifest["manifest_digest"] = sha256_text(canonical_json(manifest))
     return manifest
+
+
+def build_benchmark_manifest(
+    run: BenchmarkRunResult,
+    config: AppConfig,
+    *,
+    artifacts: Sequence[ArtifactRecord] = (),
+    git_reader: GitReader | None = None,
+    dist_reader: DistReader | None = None,
+    limitations: Sequence[str] = (),
+) -> dict[str, JsonValue]:
+    """Build a sanitized, version-complete v0.3 benchmark manifest."""
+    git_reader = git_reader or _default_git_reader
+    dist_reader = dist_reader or _default_dist_reader
+    trials = run.trials
+    scenario_by_id = {result.trial.scenario.id: result.trial.scenario for result in trials}
+    policy_ids = sorted({result.trial.policy_id for result in trials})
+    technique_ids = sorted({result.trial.technique_id for result in trials})
+    transformation_ids = sorted({result.trial.transformation_id for result in trials})
+    scorer_ids = sorted(
+        {outcome.scorer_id for result in trials for outcome in result.scoring.outcomes}
+    )
+    responses = [
+        turn.response
+        for result in trials
+        for turn in result.transcript.turns
+        if turn.response is not None
+    ]
+    eligible = sum(outcome.eligible for result in trials for outcome in result.scoring.outcomes)
+    outcome_count = sum(len(result.scoring.outcomes) for result in trials)
+    manifest: dict[str, JsonValue] = {
+        "schema_version": 3,
+        "run_id": run.run_id,
+        "started_at": _dt_manifest(run.started_at),
+        "completed_at": _dt_manifest(run.completed_at),
+        "config": redacted_config(config),
+        "config_digest": sha256_text(canonical_json(redacted_config(config))),
+        "suites": sorted({result.trial.suite_id for result in trials}),
+        "scenarios": [
+            {
+                "id": scenario.id,
+                "digest": scenario.digest,
+                "source": scenario.source.model_dump(mode="python"),
+            }
+            for scenario in sorted(scenario_by_id.values(), key=lambda value: value.id)
+        ],
+        "policies": [
+            {
+                "id": policy_id,
+                "version": (
+                    BUILTIN_POLICIES[policy_id].version if policy_id in BUILTIN_POLICIES else None
+                ),
+            }
+            for policy_id in policy_ids
+        ],
+        "techniques": [
+            {"id": technique_id, "version": TECHNIQUE_VERSION} for technique_id in technique_ids
+        ],
+        "transformations": [
+            {"id": transform_id, "version": TRANSFORM_VERSION}
+            for transform_id in transformation_ids
+        ],
+        "scorers": [{"id": scorer_id, "version": SCORER_VERSION} for scorer_id in scorer_ids],
+        "repetitions": config.evaluation.repetitions,
+        "target_capabilities": {
+            name: provider.capabilities.model_dump(mode="python")
+            for name, provider in config.providers.items()
+        },
+        "models": sorted({str(result.trial.model) for result in trials}),
+        "model_revisions": sorted(
+            {
+                response.model_revision
+                for response in responses
+                if response.model_revision is not None
+            }
+        ),
+        "canaries": [dict(result.canary_metadata) for result in trials],
+        "outcomes": {
+            "eligible": eligible,
+            "excluded": outcome_count - eligible,
+        },
+        "artifacts": [
+            {
+                "path": artifact.relative_path,
+                "media_type": artifact.media_type,
+                "byte_length": artifact.byte_length,
+                "sha256": artifact.sha256,
+            }
+            for artifact in artifacts
+        ],
+        "python": {"version": sys.version, "platform": platform.platform()},
+        "packages": dist_reader(),
+        "git": git_reader(),
+        "limitations": [
+            "Provider nondeterminism may remain even with repeated trials.",
+            "This release evaluates raw text model APIs, not live agent side effects.",
+            "Automated scorer and judge outputs are not universal security proof.",
+            *limitations,
+        ],
+    }
+    manifest["manifest_digest"] = sha256_text(canonical_json(manifest))
+    return manifest
+
+
+def _dt_manifest(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")

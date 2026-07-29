@@ -8,6 +8,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from cot_redteam.benchmark.conversation import (
+    ConversationStatus,
+    ConversationTranscript,
+    ConversationTurn,
+)
+from cot_redteam.benchmark.judge import JudgeResult
+from cot_redteam.benchmark.planner import PlannedTrial
+from cot_redteam.benchmark.results import BenchmarkRunResult, BenchmarkTrialResult
+from cot_redteam.benchmark.schema import ScenarioSpec
+from cot_redteam.benchmark.scoring import (
+    EvidenceChannel,
+    EvidenceSpan,
+    ScorerOutcome,
+    ScorerVerdict,
+    TranscriptScoring,
+)
 from cot_redteam.core.serialization import canonical_json
 from cot_redteam.core.types import (
     AttackAssessment,
@@ -15,6 +31,9 @@ from cot_redteam.core.types import (
     EvaluationItem,
     EvaluationRun,
     ItemStatus,
+    Message,
+    MessageRole,
+    MessageTrust,
     ModelRef,
     ModelResponse,
     MonitorOutcome,
@@ -65,7 +84,74 @@ MIGRATIONS: list[tuple[int, str]] = [
             details_json TEXT NOT NULL
         );
         """,
-    )
+    ),
+    (
+        2,
+        """
+        CREATE TABLE benchmark_runs (
+            run_id TEXT PRIMARY KEY,
+            started_at TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            manifest_json TEXT NOT NULL
+        );
+        CREATE TABLE benchmark_trials (
+            trial_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES benchmark_runs(run_id) ON DELETE CASCADE,
+            model TEXT NOT NULL,
+            suite_id TEXT NOT NULL,
+            scenario_id TEXT NOT NULL,
+            scenario_json TEXT NOT NULL,
+            policy_id TEXT NOT NULL,
+            technique_id TEXT NOT NULL,
+            transformation_id TEXT NOT NULL,
+            transformation_digest TEXT NOT NULL,
+            repetition INTEGER NOT NULL,
+            target_request_count INTEGER NOT NULL,
+            judge_request_count INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            error TEXT,
+            canary_metadata_json TEXT NOT NULL
+        );
+        CREATE TABLE benchmark_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trial_id TEXT NOT NULL REFERENCES benchmark_trials(trial_id) ON DELETE CASCADE,
+            message_index INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            trust TEXT NOT NULL,
+            name TEXT,
+            source TEXT,
+            content TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            UNIQUE(trial_id, message_index)
+        );
+        CREATE TABLE benchmark_turns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trial_id TEXT NOT NULL REFERENCES benchmark_trials(trial_id) ON DELETE CASCADE,
+            turn_index INTEGER NOT NULL,
+            request_messages_json TEXT NOT NULL,
+            response_json TEXT,
+            error TEXT,
+            UNIQUE(trial_id, turn_index)
+        );
+        CREATE TABLE benchmark_scorer_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trial_id TEXT NOT NULL REFERENCES benchmark_trials(trial_id) ON DELETE CASCADE,
+            outcome_index INTEGER NOT NULL,
+            outcome_json TEXT NOT NULL,
+            UNIQUE(trial_id, outcome_index)
+        );
+        CREATE TABLE benchmark_judge_calls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trial_id TEXT NOT NULL REFERENCES benchmark_trials(trial_id) ON DELETE CASCADE,
+            judge_index INTEGER NOT NULL,
+            outcome_json TEXT NOT NULL,
+            raw_input TEXT NOT NULL,
+            raw_output TEXT,
+            UNIQUE(trial_id, judge_index)
+        );
+        """,
+    ),
 ]
 
 
@@ -197,6 +283,243 @@ class SQLiteRunStore:
             conn.rollback()
             raise
 
+    def save_benchmark(self, run: BenchmarkRunResult) -> None:
+        """Transactionally replace a benchmark run and all child evidence."""
+        conn = self.connection
+        try:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM benchmark_runs WHERE run_id = ?", (run.run_id,))
+            conn.execute(
+                """
+                INSERT INTO benchmark_runs(
+                    run_id, started_at, completed_at, metadata_json, manifest_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    run.run_id,
+                    _dt(run.started_at),
+                    _dt(run.completed_at),
+                    canonical_json(dict(run.metadata)),
+                    canonical_json(dict(run.manifest)),
+                ),
+            )
+            for result in run.trials:
+                trial = result.trial
+                conn.execute(
+                    """
+                    INSERT INTO benchmark_trials(
+                        trial_id, run_id, model, suite_id, scenario_id, scenario_json,
+                        policy_id, technique_id, transformation_id, transformation_digest,
+                        repetition, target_request_count, judge_request_count, status, error,
+                        canary_metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        trial.trial_id,
+                        run.run_id,
+                        str(trial.model),
+                        trial.suite_id,
+                        trial.scenario.id,
+                        canonical_json(trial.scenario),
+                        trial.policy_id,
+                        trial.technique_id,
+                        trial.transformation_id,
+                        result.transformation_digest,
+                        trial.repetition,
+                        trial.target_request_count,
+                        trial.judge_request_count,
+                        result.transcript.status.value,
+                        result.transcript.error,
+                        canonical_json(dict(result.canary_metadata)),
+                    ),
+                )
+                for message_index, message in enumerate(result.transcript.messages):
+                    conn.execute(
+                        """
+                        INSERT INTO benchmark_messages(
+                            trial_id, message_index, role, trust, name, source, content,
+                            metadata_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            trial.trial_id,
+                            message_index,
+                            message.role.value,
+                            message.trust.value,
+                            message.name,
+                            message.source,
+                            message.content,
+                            canonical_json(dict(message.metadata)),
+                        ),
+                    )
+                for turn in result.transcript.turns:
+                    conn.execute(
+                        """
+                        INSERT INTO benchmark_turns(
+                            trial_id, turn_index, request_messages_json, response_json, error
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            trial.trial_id,
+                            turn.turn_index,
+                            canonical_json(turn.request_messages),
+                            canonical_json(turn.response) if turn.response else None,
+                            turn.error,
+                        ),
+                    )
+                for outcome_index, outcome in enumerate(result.scoring.outcomes):
+                    conn.execute(
+                        """
+                        INSERT INTO benchmark_scorer_outcomes(
+                            trial_id, outcome_index, outcome_json
+                        ) VALUES (?, ?, ?)
+                        """,
+                        (trial.trial_id, outcome_index, canonical_json(outcome)),
+                    )
+                for judge_index, judge in enumerate(result.judge_results):
+                    conn.execute(
+                        """
+                        INSERT INTO benchmark_judge_calls(
+                            trial_id, judge_index, outcome_json, raw_input, raw_output
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            trial.trial_id,
+                            judge_index,
+                            canonical_json(judge.outcome),
+                            judge.raw_input,
+                            judge.raw_output,
+                        ),
+                    )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def get_benchmark(self, run_id: str) -> BenchmarkRunResult | None:
+        row = self.connection.execute(
+            "SELECT * FROM benchmark_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        trial_rows = self.connection.execute(
+            "SELECT * FROM benchmark_trials WHERE run_id = ? ORDER BY rowid",
+            (run_id,),
+        ).fetchall()
+        results: list[BenchmarkTrialResult] = []
+        for trial_row in trial_rows:
+            trial_id = trial_row["trial_id"]
+            scenario = ScenarioSpec.model_validate(json.loads(trial_row["scenario_json"]))
+            trial = PlannedTrial(
+                trial_id=trial_id,
+                model=ModelRef.parse(trial_row["model"]),
+                suite_id=trial_row["suite_id"],
+                scenario=scenario,
+                policy_id=trial_row["policy_id"],
+                technique_id=trial_row["technique_id"],
+                transformation_id=trial_row["transformation_id"],
+                repetition=int(trial_row["repetition"]),
+                target_request_count=int(trial_row["target_request_count"]),
+                judge_request_count=int(trial_row["judge_request_count"]),
+            )
+            message_rows = self.connection.execute(
+                """
+                SELECT * FROM benchmark_messages
+                WHERE trial_id = ? ORDER BY message_index
+                """,
+                (trial_id,),
+            ).fetchall()
+            messages = tuple(
+                Message(
+                    role=MessageRole(message["role"]),
+                    content=message["content"],
+                    name=message["name"],
+                    trust=MessageTrust(message["trust"]),
+                    source=message["source"],
+                    metadata=json.loads(message["metadata_json"]),
+                )
+                for message in message_rows
+            )
+            turn_rows = self.connection.execute(
+                "SELECT * FROM benchmark_turns WHERE trial_id = ? ORDER BY turn_index",
+                (trial_id,),
+            ).fetchall()
+            turns = tuple(
+                ConversationTurn(
+                    turn_index=int(turn["turn_index"]),
+                    request_messages=tuple(
+                        self._message_from_data(value)
+                        for value in json.loads(turn["request_messages_json"])
+                    ),
+                    response=(
+                        self._response_from_json(turn["response_json"])
+                        if turn["response_json"]
+                        else None
+                    ),
+                    error=turn["error"],
+                )
+                for turn in turn_rows
+            )
+            transcript = ConversationTranscript(
+                trial_id=trial_id,
+                status=ConversationStatus(trial_row["status"]),
+                messages=messages,
+                turns=turns,
+                error=trial_row["error"],
+            )
+            outcome_rows = self.connection.execute(
+                """
+                SELECT outcome_json FROM benchmark_scorer_outcomes
+                WHERE trial_id = ? ORDER BY outcome_index
+                """,
+                (trial_id,),
+            ).fetchall()
+            scoring = TranscriptScoring(
+                trial_id=trial_id,
+                outcomes=tuple(
+                    self._scorer_outcome_from_data(json.loads(value["outcome_json"]))
+                    for value in outcome_rows
+                ),
+            )
+            judge_rows = self.connection.execute(
+                """
+                SELECT * FROM benchmark_judge_calls
+                WHERE trial_id = ? ORDER BY judge_index
+                """,
+                (trial_id,),
+            ).fetchall()
+            judges = tuple(
+                JudgeResult(
+                    outcome=self._scorer_outcome_from_data(json.loads(value["outcome_json"])),
+                    raw_input=value["raw_input"],
+                    raw_output=value["raw_output"],
+                )
+                for value in judge_rows
+            )
+            results.append(
+                BenchmarkTrialResult(
+                    trial=trial,
+                    transcript=transcript,
+                    scoring=scoring,
+                    canary_metadata=json.loads(trial_row["canary_metadata_json"]),
+                    transformation_digest=trial_row["transformation_digest"],
+                    judge_results=judges,
+                )
+            )
+        started = _parse_dt(row["started_at"])
+        completed = _parse_dt(row["completed_at"])
+        if started is None or completed is None:
+            raise ValueError(f"benchmark run {run_id!r} has invalid timestamps")
+        return BenchmarkRunResult(
+            run_id=run_id,
+            started_at=started,
+            completed_at=completed,
+            trials=tuple(results),
+            metadata=json.loads(row["metadata_json"]),
+            manifest=json.loads(row["manifest_json"]),
+        )
+
     def count_items(self, run_id: str) -> int:
         row = self.connection.execute(
             "SELECT COUNT(*) FROM evaluation_items WHERE run_id = ?",
@@ -316,6 +639,43 @@ class SQLiteRunStore:
             return
         self.connection.close()
         self._closed = True
+
+    @staticmethod
+    def _message_from_data(data: dict[str, Any]) -> Message:
+        return Message(
+            role=MessageRole(data["role"]),
+            content=data["content"],
+            name=data.get("name"),
+            trust=MessageTrust(data.get("trust", "trusted")),
+            source=data.get("source"),
+            metadata=data.get("metadata") or {},
+        )
+
+    @staticmethod
+    def _scorer_outcome_from_data(data: dict[str, Any]) -> ScorerOutcome:
+        evidence = tuple(
+            EvidenceSpan(
+                channel=EvidenceChannel(value["channel"]),
+                turn_index=int(value["turn_index"]),
+                start=int(value["start"]),
+                end=int(value["end"]),
+                text=value["text"],
+            )
+            for value in data.get("evidence") or ()
+        )
+        return ScorerOutcome(
+            scorer_id=data["scorer_id"],
+            scorer_version=data["scorer_version"],
+            channel=EvidenceChannel(data["channel"]),
+            verdict=ScorerVerdict(data["verdict"]),
+            score=data.get("score"),
+            eligible=bool(data["eligible"]),
+            metrics=data.get("metrics") or {},
+            evidence=evidence,
+            explanation=data.get("explanation") or "",
+            error=data.get("error"),
+            judge_metadata=data.get("judge_metadata") or {},
+        )
 
     @staticmethod
     def _prompt_from_json(raw: str) -> AttackPrompt:

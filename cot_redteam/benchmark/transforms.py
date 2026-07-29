@@ -14,6 +14,7 @@ from cot_redteam.core.serialization import canonical_json, sha256_text
 from cot_redteam.core.types import JsonValue, Message, MessageTrust
 
 _MAX_TRANSFORMED_LENGTH = 65_536
+TRANSFORM_VERSION = "1.0.0"
 TransformFn = Callable[[str], str]
 
 
@@ -128,13 +129,13 @@ def apply_transform(
     params = dict(parameters or {})
     payload = {
         "transform_id": transform_id,
-        "version": "1.0.0",
+        "version": TRANSFORM_VERSION,
         "parameters": params,
         "messages": tuple(transformed),
     }
     return TransformResult(
         transform_id=transform_id,
-        version="1.0.0",
+        version=TRANSFORM_VERSION,
         messages=tuple(transformed),
         parameters=params,
         digest=sha256_text(canonical_json(payload)),

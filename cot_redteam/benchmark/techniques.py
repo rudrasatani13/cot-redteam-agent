@@ -9,6 +9,7 @@ from cot_redteam.core.errors import ConfigurationError
 from cot_redteam.core.types import Message, MessageRole, MessageTrust
 
 TechniqueFn = Callable[[Message], Message]
+TECHNIQUE_VERSION = "1.0.0"
 
 
 def _replace_content(message: Message, content: str) -> Message:
