@@ -1,27 +1,48 @@
-"""
-Core types and data structures for the CoT Red Teaming Agent.
-"""
+"""Immutable runtime domain types and outcome enums for v0.2."""
+
 from __future__ import annotations
-from abc import ABC, abstractmethod
+
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Literal
-from pydantic import BaseModel, Field
+from typing import Any
+
+JsonPrimitive = None | bool | int | float | str
+# Any keeps recursive JSON containers simple for mypy/pydantic.
+JsonValue = Any
+JsonDataclass = Any
 
 
-class ModelProvider(str, Enum):
-    """Supported model providers."""
-    OPENROUTER = "openrouter"
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-    VLLM = "vllm"
-    LLAMACPP = "llamacpp"
-    LOCAL = "local"
+class ItemStatus(str, Enum):
+    SUCCEEDED = "succeeded"
+    ATTACK_ERROR = "attack_error"
+    PROVIDER_ERROR = "provider_error"
+    MONITOR_ERROR = "monitor_error"
+    BUDGET_EXCEEDED = "budget_exceeded"
+    CANCELLED = "cancelled"
+
+
+class MonitorStatus(str, Enum):
+    TRIGGERED = "triggered"
+    CLEAN = "clean"
+    ERROR = "error"
+    NOT_RUN = "not_run"
+
+
+class RunStatus(str, Enum):
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class ReasoningSource(str, Enum):
+    PROVIDER = "provider"
+    DELIMITED = "delimited"
+    ABSENT = "absent"
 
 
 class AttackCategory(str, Enum):
-    """Attack categories."""
     INJECTION = "injection"
     FAITHFULNESS = "faithfulness"
     STEGANOGRAPHY = "steganography"
@@ -32,192 +53,271 @@ class AttackCategory(str, Enum):
     GENERATIVE = "generative"
 
 
-class MonitorType(str, Enum):
-    """CoT monitor types."""
-    REGEX = "regex"
-    LLM_JUDGE = "llm_judge"
-    ENSEMBLE = "ensemble"
-    CUSTOM = "custom"
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-class Severity(str, Enum):
-    """Vulnerability severity levels."""
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
+def _validate_unit_interval(name: str, value: float | None) -> None:
+    if value is None:
+        return
+    if not 0.0 <= float(value) <= 1.0:
+        raise ValueError(f"{name} must be between 0.0 and 1.0 inclusive, got {value!r}")
 
 
-@dataclass
-class ModelConfig:
-    """Configuration for a model."""
-    provider: ModelProvider
+@dataclass(frozen=True)
+class ModelRef:
+    provider: str
     model_id: str
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
-    temperature: float = 0.7
-    max_tokens: int = 4096
-    timeout: int = 120
-    max_retries: int = 3
-    extra_params: Dict[str, Any] = field(default_factory=dict)
-    
-    @property
-    def full_id(self) -> str:
-        return f"{self.provider.value}:{self.model_id}"
+
+    def __post_init__(self) -> None:
+        if not self.provider or not self.provider.strip():
+            raise ValueError("provider must be non-empty")
+        if not self.model_id or not self.model_id.strip():
+            raise ValueError("model_id must be non-empty")
+        object.__setattr__(self, "provider", self.provider.strip())
+        object.__setattr__(self, "model_id", self.model_id.strip())
+
+    @classmethod
+    def parse(cls, value: str) -> ModelRef:
+        if ":" not in value:
+            raise ValueError("provider:model-id")
+        provider, model_id = value.split(":", 1)
+        if not provider or not model_id:
+            raise ValueError("provider:model-id")
+        return cls(provider=provider, model_id=model_id)
+
+    def __str__(self) -> str:
+        return f"{self.provider}:{self.model_id}"
 
 
-@dataclass
-class AttackConfig:
-    """Configuration for an attack."""
-    category: AttackCategory
-    name: str
-    description: str
-    parameters: Dict[str, Any] = field(default_factory=dict)
-    target_models: List[str] = field(default_factory=list)  # Empty = all
-    enabled: bool = True
-    severity: Severity = Severity.MEDIUM
+@dataclass(frozen=True)
+class TokenUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.input_tokens < 0 or self.output_tokens < 0:
+            raise ValueError("token counts must be non-negative")
+        if self.total_tokens is None:
+            object.__setattr__(
+                self,
+                "total_tokens",
+                self.input_tokens + self.output_tokens,
+            )
 
 
-@dataclass
-class AttackPrompt:
-    """A single attack prompt with metadata."""
-    prompt: str
-    attack_config: AttackConfig
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    generated_by: Optional[str] = None  # For generative attacks
-    generation: int = 0  # For evolutionary attacks
-
-
-@dataclass
-class ModelResponse:
-    """Model response with CoT extraction."""
-    full_response: str
-    cot: Optional[str] = None
-    answer: Optional[str] = None
-    model_config: Optional[ModelConfig] = None
-    latency_ms: float = 0.0
-    token_usage: Dict[str, int] = field(default_factory=dict)
-    raw_response: Any = None
-
-
-@dataclass
-class AttackResult:
-    """Result of running an attack against a model."""
-    attack_prompt: AttackPrompt
-    model_response: ModelResponse
-    monitor_results: Dict[str, Any] = field(default_factory=dict)
-    success: bool = False
-    severity: Severity = Severity.LOW
-    evidence: List[str] = field(default_factory=list)
-    metrics: Dict[str, float] = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=datetime.now)
-    run_id: str = ""
-
-
-@dataclass
-class MonitorResult:
-    """Result from a CoT monitor."""
-    monitor_type: MonitorType
-    triggered: bool
-    confidence: float
-    details: Dict[str, Any] = field(default_factory=dict)
-    explanation: str = ""
-
-
-@dataclass
-class AttackSpec:
-    """Specification for an attack (used for generative attacks)."""
-    name: str
-    category: AttackCategory
-    description: str
-    prompt_template: str
-    parameters: Dict[str, Any] = field(default_factory=dict)
-    target_models: List[str] = field(default_factory=list)
-    expected_behavior: str = ""
-    tags: List[str] = field(default_factory=list)
-
-
-@dataclass
+@dataclass(frozen=True)
 class DatasetSample:
-    """Single sample from an evaluation dataset."""
     id: str
     question: str
-    answer: Optional[str] = None
-    cot: Optional[str] = None
-    category: Optional[str] = None
-    difficulty: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    answer: str | None = None
+    category: str | None = None
+    difficulty: str | None = None
+    metadata: Mapping[str, JsonValue] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            raise ValueError("sample id is required")
+        if not self.question:
+            raise ValueError("sample question is required")
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
 
-@dataclass
-class EvalResult:
-    """Aggregated evaluation results."""
-    run_id: str
-    model_config: Optional[ModelConfig] = None
-    attack_results: List[AttackResult] = field(default_factory=list)
-    summary: Dict[str, Any] = field(default_factory=dict)
-    started_at: datetime = field(default_factory=datetime.now)
-    completed_at: Optional[datetime] = None
-    config_snapshot: Dict[str, Any] = field(default_factory=dict)
-    artifacts: Dict[str, str] = field(default_factory=dict)  # path -> description
-    artifacts_hash: Optional[str] = None
-
-
-# Pydantic models for config validation
-class GlobalConfig(BaseModel):
-    seed: int = 42
-    log_level: str = "INFO"
-    output_dir: str = "./results"
-    artifacts_dir: str = "./artifacts"
-    cache_dir: str = "./cache"
-
-
-class ModelProviderConfig(BaseModel):
-    api_key_env: Optional[str] = None
-    base_url: Optional[str] = None
-    timeout: int = 120
-    max_retries: int = 3
-    aliases: Dict[str, str] = Field(default_factory=dict)
-
-
-class AttackDefaults(BaseModel):
-    num_samples: int = 10
+@dataclass(frozen=True)
+class GenerationRequest:
+    prompt: str
+    system_prompt: str | None = None
     temperature: float = 0.7
     max_tokens: int = 4096
-    cot_extraction: bool = True
-    cot_delimiters: List[str] = Field(default_factory=lambda: [
-        "�",
-        "�",
-        "<reasoning>",
-        "</reasoning>",
-        "####",
-        "Step by step:"
-    ])
+    stop: tuple[str, ...] = ()
+    metadata: Mapping[str, JsonValue] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.prompt:
+            raise ValueError("prompt is required")
+        if not 0.0 <= self.temperature <= 2.0:
+            raise ValueError("temperature must be between 0.0 and 2.0")
+        if self.max_tokens <= 0:
+            raise ValueError("max_tokens must be positive")
+        object.__setattr__(self, "stop", tuple(self.stop))
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
 
-class GenerativeAttackConfig(BaseModel):
-    generator_model: str = "openrouter:anthropic/claude-3.5-sonnet"
-    evolution_rounds: int = 5
-    population_size: int = 20
-    mutation_rate: float = 0.3
-    crossover_rate: float = 0.5
-    fitness_metric: str = "evasion_rate"
+@dataclass(frozen=True)
+class ModelResponse:
+    text: str
+    model: ModelRef
+    reasoning: str | None = None
+    reasoning_source: ReasoningSource = ReasoningSource.ABSENT
+    latency_ms: float = 0.0
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    provider_request_id: str | None = None
+    finish_reason: str | None = None
+    model_revision: str | None = None
+    metadata: Mapping[str, JsonValue] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.latency_ms < 0:
+            raise ValueError("latency_ms must be non-negative")
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
 
-class MonitorConfig(BaseModel):
-    enabled: List[str] = Field(default_factory=lambda: ["regex", "llm_judge", "ensemble"])
+@dataclass(frozen=True)
+class AttackPrompt:
+    attack_id: str
+    text: str
+    sample_id: str
+    system_prompt: str | None = None
+    metadata: Mapping[str, JsonValue] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.attack_id:
+            raise ValueError("attack_id is required")
+        if not self.text:
+            raise ValueError("prompt text is required")
+        if not self.sample_id:
+            raise ValueError("sample_id is required")
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
 
-class Config(BaseModel):
-    global_: GlobalConfig = Field(default_factory=GlobalConfig, alias="global")
-    models: Dict[str, ModelProviderConfig] = Field(default_factory=dict)
-    attacks: Dict[str, Any] = Field(default_factory=dict)
-    monitors: MonitorConfig = Field(default_factory=MonitorConfig)
+@dataclass(frozen=True)
+class AttackAssessment:
+    success: bool
+    score: float
+    evidence: tuple[str, ...] = ()
+    metrics: Mapping[str, float] = field(default_factory=dict)
+    explanation: str = ""
+
+    def __post_init__(self) -> None:
+        _validate_unit_interval("score", self.score)
+        object.__setattr__(self, "evidence", tuple(self.evidence))
+        object.__setattr__(self, "metrics", dict(self.metrics))
+        for key, value in self.metrics.items():
+            if not isinstance(value, (int, float)):
+                raise ValueError(f"metric {key!r} must be numeric")
 
 
-def load_config(path: str = "config.yaml") -> Config:
-    """Load configuration from YAML file."""
-    import yaml
-    with open(path, "r") as f:
-        data = yaml.safe_load(f)
-    return Config(**data)
+@dataclass(frozen=True)
+class MonitorOutcome:
+    monitor_id: str
+    status: MonitorStatus
+    confidence: float | None
+    explanation: str
+    details: Mapping[str, JsonValue] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.monitor_id:
+            raise ValueError("monitor_id is required")
+        _validate_unit_interval("confidence", self.confidence)
+        object.__setattr__(self, "details", dict(self.details))
+
+    @property
+    def is_evaluable(self) -> bool:
+        return self.status in (MonitorStatus.TRIGGERED, MonitorStatus.CLEAN)
+
+    @property
+    def triggered(self) -> bool | None:
+        if self.status is MonitorStatus.TRIGGERED:
+            return True
+        if self.status is MonitorStatus.CLEAN:
+            return False
+        return None
+
+
+@dataclass(frozen=True)
+class EvaluationItem:
+    item_id: str
+    model: ModelRef
+    attack_id: str
+    sample_id: str
+    status: ItemStatus
+    prompt: AttackPrompt | None = None
+    response: ModelResponse | None = None
+    assessment: AttackAssessment | None = None
+    monitors: tuple[MonitorOutcome, ...] = ()
+    error: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "monitors", tuple(self.monitors))
+        if self.status is ItemStatus.SUCCEEDED:
+            if self.prompt is None:
+                raise ValueError("succeeded items require a prompt")
+            if self.response is None:
+                raise ValueError("succeeded items require a response")
+            if self.assessment is None:
+                raise ValueError("succeeded items require an assessment")
+            if self.error is not None:
+                raise ValueError("succeeded items must not set error")
+        elif self.status in (
+            ItemStatus.ATTACK_ERROR,
+            ItemStatus.PROVIDER_ERROR,
+            ItemStatus.MONITOR_ERROR,
+            ItemStatus.BUDGET_EXCEEDED,
+        ):
+            if not self.error:
+                raise ValueError(f"{self.status.value} items require an error message")
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    status: RunStatus
+    planned: int
+    succeeded: int
+    failed: int
+    cancelled: int
+    monitor_excluded: int
+
+    @classmethod
+    def from_items(cls, items: Sequence[EvaluationItem]) -> RunSummary:
+        planned = len(items)
+        succeeded = sum(1 for item in items if item.status is ItemStatus.SUCCEEDED)
+        cancelled = sum(1 for item in items if item.status is ItemStatus.CANCELLED)
+        failed = planned - succeeded - cancelled
+        monitor_excluded = 0
+        for item in items:
+            if item.status is not ItemStatus.SUCCEEDED:
+                continue
+            if not item.monitors:
+                monitor_excluded += 1
+                continue
+            if any(not outcome.is_evaluable for outcome in item.monitors):
+                monitor_excluded += 1
+
+        if planned == 0 or succeeded == 0:
+            status = RunStatus.FAILED
+        elif failed == 0 and cancelled == 0:
+            status = RunStatus.COMPLETED
+        else:
+            status = RunStatus.PARTIAL
+
+        return cls(
+            status=status,
+            planned=planned,
+            succeeded=succeeded,
+            failed=failed,
+            cancelled=cancelled,
+            monitor_excluded=monitor_excluded,
+        )
+
+
+@dataclass(frozen=True)
+class EvaluationRun:
+    run_id: str
+    status: RunStatus
+    items: tuple[EvaluationItem, ...]
+    summary: RunSummary
+    started_at: datetime
+    completed_at: datetime
+    seed: int | None = None
+    config_digest: str | None = None
+    dataset_digest: str | None = None
+    metadata: Mapping[str, JsonValue] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "items", tuple(self.items))
+        object.__setattr__(self, "metadata", dict(self.metadata))
+        if self.summary.status is not self.status:
+            raise ValueError("run status must match summary status")

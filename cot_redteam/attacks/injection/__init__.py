@@ -1,6 +1,7 @@
 """
 Injection attacks package.
 """
+
 from cot_redteam.attacks.injection.attacks import (
     CoTInjectionAttack,
     CoTInjectionIgnorePrevious,
@@ -9,6 +10,6 @@ from cot_redteam.attacks.injection.attacks import (
 
 __all__ = [
     "CoTInjectionAttack",
-    "CoTInjectionIgnorePrevious", 
+    "CoTInjectionIgnorePrevious",
     "CoTInjectionRoleplay",
 ]

@@ -1,11 +1,12 @@
 """
 Evasion attacks package.
 """
+
 from cot_redteam.attacks.evasion.attacks import (
-    MonitorAwarenessAttack,
-    StealthReasoningAttack,
     DualProcessAttack,
+    MonitorAwarenessAttack,
     NaturalLanguageCamouflageAttack,
+    StealthReasoningAttack,
 )
 
 __all__ = [

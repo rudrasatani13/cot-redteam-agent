@@ -1,0 +1,27 @@
+version: 2
+
+global:
+  seed: 7
+  concurrency: 2
+
+providers:
+  openrouter:
+    kind: openrouter
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+  vllm:
+    kind: vllm
+    base_url: http://localhost:8000/v1
+
+evaluation:
+  models:
+    - openrouter:test/model
+  attacks:
+    - injection.cot_injection
+  monitors:
+    - regex
+  dataset_path: pkg:sample.jsonl
+  sample_count: 2
+  budgets:
+    max_requests: 10
+    max_elapsed_seconds: 60
