@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- Agentic attack `injection.system_canary_agent`: seed bank → classify defense →
+  invent next technique until real final-text disclosure or `max_attempts`
+- Deterministic technique catalog (format, transform, authority, social, …)
+  selected from refusal/defense feedback
+
+### Fixed
+
+- Canary mentioned only while refusing in final text is no longer attack success;
+  require compliant disclosure (own line, structured field, or non-refusal dump)
+
 ## 0.4.0 — 2026-07-30
 
 ### Added

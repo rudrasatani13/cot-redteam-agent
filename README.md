@@ -22,8 +22,10 @@ and last real successful disclosure (refusal re-quotes are not counted as succes
 ## What it does
 
 - Runs built-in and third-party attacks against one or more target models.
-- Adaptive educational canary extraction: loops a packaged payload bank until a
-  real disclosure succeeds or the bank is exhausted.
+- Agentic canary extraction: seeds a payload bank, classifies each refusal, then
+  invents the next technique until a **compliant final-text** disclosure (or
+  budget). Refusal quotes are not success.
+- Adaptive fixed-bank mode also available (`injection.system_canary_adaptive`).
 - Interactive Codex-style TUI with slash commands, multi-model board, and live
   attempt timeline (`cot-redteam tui`).
 - Runs packaged 12-trial smoke and 56-scenario core prompt-injection suites.
@@ -106,7 +108,7 @@ The generated configuration uses the packaged `pkg:sample.jsonl` dataset and
 works outside the repository. It includes optional provider examples, but
 validation requires credentials only for providers referenced by the selected
 evaluation and generative models. The default attack is
-`injection.system_canary_adaptive` (multi-payload educational loop).
+`injection.system_canary_agent` (invent techniques until real disclosure).
 
 Run the configured evaluation when you are ready to contact the provider:
 

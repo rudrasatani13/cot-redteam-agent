@@ -42,6 +42,34 @@ class BaseAttack(ABC):
         raw = self.config.get("stop_on_success", True)
         return bool(raw)
 
+    @property
+    def is_agentic(self) -> bool:
+        """If True, the engine invents further prompts after bank exhaustion."""
+        return False
+
+    @property
+    def max_attempts(self) -> int | None:
+        """Optional hard cap for agentic / adaptive multi-attempt loops."""
+        raw = self.config.get("max_attempts")
+        if raw is None:
+            return None
+        return int(raw)
+
+    def next_prompt_after_failure(
+        self,
+        sample: DatasetSample,
+        history: Sequence[Mapping[str, JsonValue]],
+        *,
+        max_attempts: int | None = None,
+    ) -> AttackPrompt | None:
+        """Return the next invented prompt after a failed attempt, or None.
+
+        Non-agentic attacks leave this as a no-op. Agentic attacks use the
+        failure history (defense class, prior payload ids) to pick a new technique.
+        """
+        del sample, history, max_attempts
+        return None
+
     @abstractmethod
     def assess(
         self,

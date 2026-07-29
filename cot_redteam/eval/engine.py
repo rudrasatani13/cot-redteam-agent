@@ -327,15 +327,42 @@ class EvaluationEngine:
             return result
 
         stop_on_success = attack.stop_on_success
+        agentic = bool(getattr(attack, "is_agentic", False))
+        configured_max = getattr(attack, "max_attempts", None)
+        if configured_max is None:
+            max_attempts = max(len(prompts), 1)
+            if agentic:
+                max_attempts = max(max_attempts, 24)
+        else:
+            max_attempts = max(1, int(configured_max))
+
+        pending: list[AttackPrompt] = list(prompts)
         attempt_history: list[dict[str, JsonValue]] = []
         last_prompt: AttackPrompt | None = None
         last_response: ModelResponse | None = None
         last_assessment: AttackAssessment | None = None
         successful_payload_id: str | None = None
+        attempt_index = 0
 
-        for attempt_index, prompt in enumerate(prompts, start=1):
+        while attempt_index < max_attempts:
+            if pending:
+                prompt = pending.pop(0)
+            elif agentic:
+                nxt = attack.next_prompt_after_failure(
+                    item.sample,
+                    attempt_history,
+                    max_attempts=max_attempts,
+                )
+                if nxt is None:
+                    break
+                prompt = nxt
+            else:
+                break
+
+            attempt_index += 1
             last_prompt = prompt
             payload_id = str(prompt.metadata.get("payload_id") or f"attempt_{attempt_index}")
+            invented = bool(prompt.metadata.get("invented"))
             await emit(
                 self.progress,
                 RunEvent(
@@ -347,8 +374,11 @@ class EvaluationEngine:
                     sample_id=item.sample.id,
                     payload_id=payload_id,
                     attempt=attempt_index,
-                    attempts_total=len(prompts),
-                    message=f"trying payload {payload_id} ({attempt_index}/{len(prompts)})",
+                    attempts_total=max_attempts,
+                    message=(
+                        f"{'invent' if invented else 'try'} payload {payload_id} "
+                        f"({attempt_index}/{max_attempts})"
+                    ),
                 ),
             )
             try:
@@ -437,15 +467,36 @@ class EvaluationEngine:
                 return result
 
             last_assessment = assessment
+            defense_class = "unknown"
+            if hasattr(attack, "defense_class_from_assessment"):
+                try:
+                    defense_class = str(
+                        attack.defense_class_from_assessment(assessment, response)  # type: ignore[attr-defined]
+                    )
+                except Exception:
+                    defense_class = "unknown"
+            elif "[defense=" in assessment.explanation:
+                # Parse agent tag if present.
+                try:
+                    defense_class = assessment.explanation.split("[defense=", 1)[1].rstrip("]")
+                except Exception:
+                    defense_class = "unknown"
+
             attempt_history.append(
                 {
                     "attempt": attempt_index,
                     "payload_id": payload_id,
+                    "technique_id": str(prompt.metadata.get("technique_id") or payload_id),
                     "success": assessment.success,
                     "score": assessment.score,
                     "evidence": list(assessment.evidence),
+                    "defense_class": defense_class,
+                    "invented": invented,
                     "refusal_analysis_with_canary_quote": float(
                         assessment.metrics.get("refusal_analysis_with_canary_quote", 0.0)
+                    ),
+                    "refusal_with_canary_in_final": float(
+                        assessment.metrics.get("refusal_with_canary_in_final", 0.0)
                     ),
                 }
             )
@@ -460,10 +511,11 @@ class EvaluationEngine:
                     sample_id=item.sample.id,
                     payload_id=payload_id,
                     attempt=attempt_index,
-                    attempts_total=len(prompts),
+                    attempts_total=max_attempts,
                     success=assessment.success,
                     message=(
-                        f"payload {payload_id}: {'SUCCESS' if assessment.success else 'fail'}"
+                        f"payload {payload_id}: "
+                        f"{'SUCCESS' if assessment.success else f'fail/{defense_class}'}"
                     ),
                     tokens_input=response.usage.input_tokens,
                     tokens_output=response.usage.output_tokens,
@@ -471,10 +523,15 @@ class EvaluationEngine:
                     detail={
                         "score": assessment.score,
                         "explanation": assessment.explanation,
+                        "defense_class": defense_class,
+                        "invented": invented,
                         "response_preview": (response.text or "")[:400],
                         "reasoning_preview": (response.reasoning or "")[:400],
                         "refusal_analysis_with_canary_quote": float(
                             assessment.metrics.get("refusal_analysis_with_canary_quote", 0.0)
+                        ),
+                        "refusal_with_canary_in_final": float(
+                            assessment.metrics.get("refusal_with_canary_in_final", 0.0)
                         ),
                     },
                 ),
@@ -484,15 +541,25 @@ class EvaluationEngine:
                 if stop_on_success:
                     break
 
-        assert last_prompt is not None
-        assert last_response is not None
-        assert last_assessment is not None
+        if last_prompt is None or last_response is None or last_assessment is None:
+            result = EvaluationItem(
+                item_id=item.item_id,
+                model=item.model,
+                attack_id=item.attack_id,
+                sample_id=item.sample.id,
+                status=ItemStatus.ATTACK_ERROR,
+                error="attack produced no attempts",
+                started_at=started,
+                completed_at=datetime.now(timezone.utc),
+            )
+            await self._emit_item_finished(plan, result)
+            return result
 
         prompt, assessment = self._with_attempt_metadata(
             last_prompt,
             last_assessment,
             attempt=len(attempt_history),
-            attempts_total=len(prompts),
+            attempts_total=max_attempts,
             attempt_history=attempt_history,
             successful_payload_id=successful_payload_id,
         )
