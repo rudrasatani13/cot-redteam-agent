@@ -114,60 +114,51 @@ if TEXTUAL_AVAILABLE:
             min-height: 3;
             max-height: 4;
         }
-        /* Fixed bottom bar — NEVER overlapped */
+        /* Fixed bottom chrome: full-width type line, no tall-border clipping */
         #bottom {
-            height: 4;
-            min-height: 4;
-            max-height: 4;
+            height: 3;
+            min-height: 3;
+            max-height: 3;
             layout: vertical;
-            background: #020617;
-            border-top: heavy #22d3ee;
-            padding: 0 1;
+            background: #022c22;
+            border-top: heavy #2dd4bf;
+            padding: 0;
         }
         #keys-bar {
             height: 1;
             min-height: 1;
             max-height: 1;
-            color: #94a3b8;
-            background: #020617;
+            color: #99f6e4;
+            background: #022c22;
             content-align: left middle;
-            text-style: none;
-        }
-        #command-row {
-            height: 3;
-            min-height: 3;
-            max-height: 3;
-            layout: horizontal;
-            background: #020617;
-            align: left middle;
-        }
-        #cmd-label {
-            width: 3;
-            height: 3;
-            color: #22d3ee;
-            text-style: bold;
-            content-align: center middle;
-            background: #020617;
-        }
-        #command {
-            width: 1fr;
-            height: 3;
-            background: #0f172a;
-            color: #f8fafc;
-            border: tall #22d3ee;
             padding: 0 1;
         }
-        #command:focus {
-            border: tall #a5f3fc;
-            background: #164e63;
-            color: #ffffff;
+        #command-row {
+            height: 2;
+            min-height: 2;
+            max-height: 2;
+            layout: horizontal;
+            background: #042f2e;
+            padding: 0 1;
+            align: left middle;
         }
-        #cmd-hint {
-            width: 10;
-            height: 3;
-            color: #67e8f9;
-            content-align: center middle;
-            background: #020617;
+        /* No separate ❯ widget + tall border (that was half-clipping the box).
+           Input is full width, flat border, one clear typing row. */
+        #command {
+            width: 1fr;
+            height: 1;
+            min-height: 1;
+            max-height: 1;
+            background: #134e4a;
+            color: #ecfdf5;
+            border: solid #2dd4bf;
+            padding: 0 1;
+            margin: 0;
+        }
+        #command:focus {
+            background: #0f766e;
+            color: #ffffff;
+            border: solid #5eead4;
         }
         """
 
@@ -228,16 +219,16 @@ if TEXTUAL_AVAILABLE:
                 yield Static(id="leak")
             with Vertical(id="bottom"):
                 yield Static(
-                    " F5 Run   ·   F1 Help   ·   Ctrl+L Clear   ·   Ctrl+C Quit   ·   type /run then Enter",
+                    "F5=Run  F1=Help  Ctrl+L=Clear  Ctrl+C=Quit   |   yahan type karo → /run  phir Enter",
                     id="keys-bar",
                 )
                 with Horizontal(id="command-row"):
-                    yield Static("❯", id="cmd-label")
+                    # Single full-width input — no side widgets that clip the border
                     yield Input(
-                        placeholder="/run",
+                        value="",
+                        placeholder=">>> /run",
                         id="command",
                     )
-                    yield Static("Enter", id="cmd-hint")
 
         def on_mount(self) -> None:
             self.title = "CoT Red Team"
