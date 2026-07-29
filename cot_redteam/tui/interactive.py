@@ -54,21 +54,28 @@ if TEXTUAL_AVAILABLE:
             background: #111827;
             color: #e5e7eb;
             text-style: bold;
+            dock: top;
+            height: 1;
         }
         Footer {
             background: #111827;
             color: #9ca3af;
+            dock: bottom;
+            height: 1;
         }
         #main {
             height: 1fr;
             layout: vertical;
             padding: 0 1;
+            min-height: 0;
         }
         #dashboard {
             height: 1fr;
             background: #0b0f14;
             padding: 0;
             overflow-y: auto;
+            overflow-x: hidden;
+            min-height: 0;
         }
         #command-row {
             height: 3;
@@ -76,7 +83,7 @@ if TEXTUAL_AVAILABLE:
             padding: 0 1;
             background: #0b0f14;
             border-top: solid #1f2937;
-            align: left middle;
+            align-vertical: middle;
         }
         #command {
             width: 1fr;
@@ -84,7 +91,6 @@ if TEXTUAL_AVAILABLE:
             color: #f9fafb;
             border: tall #374151;
             padding: 0 1;
-            margin: 0 0 0 0;
         }
         #command:focus {
             border: tall #22d3ee;
@@ -137,10 +143,8 @@ if TEXTUAL_AVAILABLE:
             max_payloads = attack_cfg.get("max_attempts") or attack_cfg.get("max_payloads") or 24
             self.state.max_payloads = int(max_payloads)
             self.state.stop_on_success = bool(attack_cfg.get("stop_on_success", True))
-            self.state.current_activity = "ready — type /run to start agentic red-team"
-            self.state.command_hint = (
-                "/help  /model provider:id  /add provider:id  /payloads N  /run  /stop  /quit"
-            )
+            self.state.current_activity = "ready — /run to start · F5 also works"
+            self.state.command_hint = "/help /model /add /payloads /run /stop /quit"
             self.state.title = "CoT Red Team Agent"
 
         def compose(self) -> ComposeResult:
@@ -152,7 +156,7 @@ if TEXTUAL_AVAILABLE:
             with Horizontal(id="command-row"):
                 yield Static("❯", id="cmd-label")
                 yield Input(
-                    placeholder="/help   /model openrouter:your-model   /run",
+                    placeholder="/run   ·   /help  /model provider:id  /stop  /quit",
                     id="command",
                 )
             yield Footer()
