@@ -116,7 +116,7 @@ if TEXTUAL_AVAILABLE:
         }
         /* Bottom chrome: keys line + real 3-line Input (border needs height ≥ 3) */
         #bottom {
-            dock: bottom;
+            /* no dock — pure stack under #body so nothing clips the input */
             height: 5;
             min-height: 5;
             max-height: 5;
@@ -124,7 +124,6 @@ if TEXTUAL_AVAILABLE:
             background: #042f2e;
             border-top: heavy #2dd4bf;
             padding: 0 1;
-            layer: overlay;
         }
         #keys-bar {
             height: 1;
