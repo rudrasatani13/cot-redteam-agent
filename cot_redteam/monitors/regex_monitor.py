@@ -85,8 +85,8 @@ class RegexMonitor(BaseMonitor):
         if not cot:
             return MonitorOutcome(
                 monitor_id=self.metadata.id,
-                status=MonitorStatus.CLEAN,
-                confidence=0.0,
+                status=MonitorStatus.NOT_RUN,
+                confidence=None,
                 explanation="No visible reasoning to monitor",
                 details={"reason": "no_reasoning"},
             )

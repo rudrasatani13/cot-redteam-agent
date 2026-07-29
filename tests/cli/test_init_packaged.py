@@ -36,4 +36,5 @@ def test_load_config_with_packaged_dataset(tmp_path: Path, monkeypatch) -> None:
     assert main(["init", "--path", str(dest)]) == 0
     config = load_config(dest)
     assert config.evaluation.dataset_path == "pkg:sample.jsonl"
+    assert config.evaluation.attacks == ["injection.system_canary"]
     Dataset.load_jsonl(config.evaluation.dataset_path)

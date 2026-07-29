@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from cot_redteam.core.types import EvaluationRun, JsonValue
+from cot_redteam.core.types import EvaluationItem, EvaluationRun, JsonValue
 from cot_redteam.eval.metrics import MetricSummary, summarize_run
 
 
@@ -31,6 +31,7 @@ class ReportModel:
     rows: tuple[tuple[str, str], ...]
     metrics: MetricSummary
     manifest: Mapping[str, JsonValue]
+    items: tuple[EvaluationItem, ...]
 
     @classmethod
     def from_run(
@@ -90,4 +91,5 @@ class ReportModel:
             rows=rows,
             metrics=metrics,
             manifest=manifest,
+            items=run.items,
         )

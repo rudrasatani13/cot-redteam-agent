@@ -55,7 +55,7 @@ evaluation:
   models:
     - openrouter:anthropic/claude-3.5-sonnet
   attacks:
-    - injection.cot_injection
+    - injection.system_canary
   monitors:
     - regex
   # Packaged sample dataset (works from installed wheels). Override with a local path if needed.
