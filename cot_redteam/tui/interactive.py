@@ -46,6 +46,7 @@ if TEXTUAL_AVAILABLE:
         """Interactive multi-model adaptive red-team dashboard."""
 
         CSS = """
+        /* Pure vertical stack — no dock race between input and Footer */
         Screen {
             layout: vertical;
             background: #0b0f14;
@@ -54,47 +55,47 @@ if TEXTUAL_AVAILABLE:
             background: #111827;
             color: #e5e7eb;
             text-style: bold;
-            dock: top;
             height: 1;
         }
         Footer {
             background: #111827;
             color: #9ca3af;
-            dock: bottom;
             height: 1;
         }
-        #main {
+        #body {
             height: 1fr;
             layout: vertical;
-            padding: 0 1;
             min-height: 0;
         }
         #dashboard {
             height: 1fr;
             background: #0b0f14;
-            padding: 0;
+            padding: 0 1;
             overflow-y: auto;
             overflow-x: hidden;
             min-height: 0;
         }
         #command-row {
             height: 3;
-            dock: bottom;
+            min-height: 3;
+            max-height: 3;
             padding: 0 1;
-            background: #0b0f14;
-            border-top: solid #1f2937;
-            align-vertical: middle;
+            background: #0f172a;
+            border-top: heavy #22d3ee;
+            align: left middle;
         }
         #command {
             width: 1fr;
+            height: 3;
             background: #111827;
             color: #f9fafb;
-            border: tall #374151;
+            border: tall #22d3ee;
             padding: 0 1;
         }
         #command:focus {
-            border: tall #22d3ee;
-            background: #0f172a;
+            border: tall #67e8f9;
+            background: #0b1220;
+            color: #f8fafc;
         }
         #cmd-label {
             color: #22d3ee;
@@ -102,6 +103,14 @@ if TEXTUAL_AVAILABLE:
             width: 3;
             height: 3;
             content-align: center middle;
+        }
+        #cmd-hint {
+            dock: right;
+            width: auto;
+            color: #6b7280;
+            height: 3;
+            content-align: right middle;
+            padding: 0 1 0 0;
         }
         """
 
@@ -150,15 +159,19 @@ if TEXTUAL_AVAILABLE:
         def compose(self) -> ComposeResult:
             from textual.containers import Horizontal
 
+            # Vertical stack only (no dock:bottom on command-row):
+            # Header → body(dashboard 1fr + command-row 3) → Footer
+            # so the input is always visible above the key-binding footer.
             yield Header(show_clock=True)
-            with Container(id="main"):
+            with Container(id="body"):
                 yield Static(id="dashboard")
-            with Horizontal(id="command-row"):
-                yield Static("❯", id="cmd-label")
-                yield Input(
-                    placeholder="/run   ·   /help  /model provider:id  /stop  /quit",
-                    id="command",
-                )
+                with Horizontal(id="command-row"):
+                    yield Static("❯", id="cmd-label")
+                    yield Input(
+                        placeholder="type here:  /run   |   /help  /model provider:id  /stop  /quit",
+                        id="command",
+                    )
+                    yield Static("Enter ↵", id="cmd-hint")
             yield Footer()
 
         def on_mount(self) -> None:
