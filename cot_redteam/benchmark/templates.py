@@ -7,6 +7,8 @@ from collections.abc import Mapping, Set
 from string import Formatter
 
 _SIMPLE_VARIABLE = re.compile(r"^[a-z][a-z0-9_]*$")
+ATTACK_TEMPLATE_VARIABLES = frozenset({"task", "rogue_string", "untrusted_content", "label"})
+POLICY_TEMPLATE_VARIABLES = frozenset({"canary", "task", "untrusted_content_label"})
 
 
 def template_variables(template: str) -> tuple[str, ...]:

@@ -7,7 +7,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from cot_redteam.benchmark.templates import validate_template
+from cot_redteam.benchmark.templates import (
+    ATTACK_TEMPLATE_VARIABLES,
+    POLICY_TEMPLATE_VARIABLES,
+    validate_template,
+)
 from cot_redteam.core.serialization import canonical_json, sha256_text
 from cot_redteam.core.types import MessageRole, MessageTrust, TargetRequirements
 
@@ -32,8 +36,6 @@ ObjectiveType = Literal[
 
 _STABLE_ID = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 _VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-_ATTACK_VARIABLES = frozenset({"task", "rogue_string", "untrusted_content", "label"})
-_POLICY_VARIABLES = frozenset({"canary", "task", "untrusted_content_label"})
 _MAX_TEMPLATE_LENGTH = 32_000
 
 
@@ -82,7 +84,7 @@ class MessageTemplateSpec(StrictModel):
     @classmethod
     def _safe_content_template(cls, value: str) -> str:
         try:
-            validate_template(value, allowed_variables=_ATTACK_VARIABLES)
+            validate_template(value, allowed_variables=ATTACK_TEMPLATE_VARIABLES)
         except ValueError as exc:
             raise ValueError(f"invalid message template: {exc}") from exc
         return value
@@ -185,7 +187,7 @@ class PolicySpec(StrictModel):
     @field_validator("allowed_variables")
     @classmethod
     def _valid_variables(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        unknown = set(values) - _POLICY_VARIABLES
+        unknown = set(values) - POLICY_TEMPLATE_VARIABLES
         if unknown:
             raise ValueError(f"unsupported policy variables: {sorted(unknown)}")
         if len(values) != len(set(values)):
