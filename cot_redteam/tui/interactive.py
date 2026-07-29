@@ -48,19 +48,54 @@ if TEXTUAL_AVAILABLE:
         CSS = """
         Screen {
             layout: vertical;
+            background: #0b0f14;
+        }
+        Header {
+            background: #111827;
+            color: #e5e7eb;
+            text-style: bold;
+        }
+        Footer {
+            background: #111827;
+            color: #9ca3af;
+        }
+        #main {
+            height: 1fr;
+            layout: vertical;
+            padding: 0 1;
         }
         #dashboard {
             height: 1fr;
-            border: round $accent;
-            padding: 0 1;
+            background: #0b0f14;
+            padding: 0;
+            overflow-y: auto;
         }
         #command-row {
             height: 3;
             dock: bottom;
             padding: 0 1;
+            background: #0b0f14;
+            border-top: solid #1f2937;
+            align: left middle;
         }
         #command {
             width: 1fr;
+            background: #111827;
+            color: #f9fafb;
+            border: tall #374151;
+            padding: 0 1;
+            margin: 0 0 0 0;
+        }
+        #command:focus {
+            border: tall #22d3ee;
+            background: #0f172a;
+        }
+        #cmd-label {
+            color: #22d3ee;
+            text-style: bold;
+            width: 3;
+            height: 3;
+            content-align: center middle;
         }
         """
 
@@ -68,6 +103,7 @@ if TEXTUAL_AVAILABLE:
             Binding("ctrl+c", "stop_or_quit", "Stop/Quit", priority=True),
             Binding("f1", "help", "Help"),
             Binding("f5", "run", "Run"),
+            Binding("ctrl+l", "clear_log", "Clear"),
         ]
 
         def __init__(
@@ -93,41 +129,56 @@ if TEXTUAL_AVAILABLE:
             attacks = list(self.session_config.evaluation.attacks)
             self.state.ensure_models(models)
             self.state.model = models[0] if models else "-"
-            self.state.attack_id = attacks[0] if attacks else "injection.system_canary_adaptive"
-            self.state.effort = "adaptive"
+            default_attack = "injection.system_canary_agent"
+            self.state.attack_id = attacks[0] if attacks else default_attack
+            self.state.effort = "agentic" if "agent" in self.state.attack_id else "adaptive"
             self.state.sandbox = "local-eval"
             attack_cfg = self.session_config.evaluation.attack_config.get(self.state.attack_id, {})
-            max_payloads = attack_cfg.get("max_payloads") or attack_cfg.get("max_attempts") or 12
+            max_payloads = attack_cfg.get("max_attempts") or attack_cfg.get("max_payloads") or 24
             self.state.max_payloads = int(max_payloads)
             self.state.stop_on_success = bool(attack_cfg.get("stop_on_success", True))
-            self.state.current_activity = "ready — /run to start adaptive red-team"
+            self.state.current_activity = "ready — type /run to start agentic red-team"
             self.state.command_hint = (
-                "/help · /model … · /add … · /payloads N · /run · /stop · /quit"
+                "/help  /model provider:id  /add provider:id  /payloads N  /run  /stop  /quit"
             )
+            self.state.title = "CoT Red Team Agent"
 
         def compose(self) -> ComposeResult:
+            from textual.containers import Horizontal
+
             yield Header(show_clock=True)
-            yield Static(id="dashboard")
-            with Container(id="command-row"):
+            with Container(id="main"):
+                yield Static(id="dashboard")
+            with Horizontal(id="command-row"):
+                yield Static("❯", id="cmd-label")
                 yield Input(
-                    placeholder="> /help  /model xkiro:qwen/qwen3.5-flash  /run",
+                    placeholder="/help   /model openrouter:your-model   /run",
                     id="command",
                 )
             yield Footer()
 
         def on_mount(self) -> None:
-            self.title = "CoT Red Team Agent"
-            self.sub_title = "adaptive educational red-team"
+            self.title = "CoT Red Team"
+            self.sub_title = self._subtitle()
             self._consumer_task = asyncio.create_task(self._consume_events())
-            self.set_interval(0.2, self._refresh_dashboard)
+            self.set_interval(0.15, self._refresh_dashboard)
             self.query_one("#command", Input).focus()
             self._refresh_dashboard()
             if self._auto_start:
                 self.action_run()
 
+        def _subtitle(self) -> str:
+            st = self.state.status
+            if st in {"running", "probing", "starting"}:
+                return f"{st} · {self.state.attempt}/{self.state.attempts_total or self.state.max_payloads} · ok {self.state.successes} fail {self.state.failures}"
+            if self.state.successes:
+                return f"{st} · leak found · ok {self.state.successes}"
+            return f"{st} · educational canary red-team"
+
         def _refresh_dashboard(self) -> None:
             dash = self.query_one("#dashboard", Static)
             dash.update(render_dashboard(self.state))
+            self.sub_title = self._subtitle()
 
         async def _consume_events(self) -> None:
             while True:
@@ -163,13 +214,12 @@ if TEXTUAL_AVAILABLE:
                 [self.state.attack_id] if self.state.attack_id else list(cfg.evaluation.attacks)
             )
             if self.state.effort == "fixed":
-                # Single classic canary prompt.
-                if not attacks or attacks[0].endswith("_adaptive"):
-                    attacks = ["injection.system_canary"]
+                attacks = ["injection.system_canary"]
+            elif self.state.effort == "adaptive":
+                attacks = ["injection.system_canary_adaptive"]
             else:
-                if not attacks or attacks[0] == "injection.system_canary":
-                    attacks = ["injection.system_canary_adaptive"]
-                self.state.attack_id = attacks[0]
+                attacks = ["injection.system_canary_agent"]
+            self.state.attack_id = attacks[0]
             evaluation = cfg.evaluation.model_copy(
                 update={
                     "models": models,
@@ -182,6 +232,9 @@ if TEXTUAL_AVAILABLE:
                 cfg,
                 attack_id,
                 max_payloads=self.state.max_payloads,
+                max_attempts=self.state.max_payloads,
+                seed_payloads=min(4, self.state.max_payloads),
+                require_final_text=True,
                 stop_on_success=self.state.stop_on_success,
                 bank_path="pkg:system_canary_bank.jsonl",
             )
@@ -304,15 +357,19 @@ if TEXTUAL_AVAILABLE:
                     self._note(f"effort={self.state.effort}", ok=True)
                     return
                 mode = parsed.args[0].lower()
-                if mode not in {"adaptive", "fixed"}:
-                    self._note("usage: /effort adaptive|fixed", ok=False)
+                if mode not in {"adaptive", "fixed", "agentic", "agent"}:
+                    self._note("usage: /effort agentic|adaptive|fixed", ok=False)
                     return
-                self.state.effort = mode
-                if mode == "adaptive":
+                if mode in {"agentic", "agent"}:
+                    self.state.effort = "agentic"
+                    self.state.attack_id = "injection.system_canary_agent"
+                elif mode == "adaptive":
+                    self.state.effort = "adaptive"
                     self.state.attack_id = "injection.system_canary_adaptive"
                 else:
+                    self.state.effort = "fixed"
                     self.state.attack_id = "injection.system_canary"
-                self._note(f"effort={mode} attack={self.state.attack_id}")
+                self._note(f"effort={self.state.effort} attack={self.state.attack_id}")
                 return
 
             if parsed.kind is CommandKind.STOP_ON_SUCCESS:
@@ -430,6 +487,9 @@ if TEXTUAL_AVAILABLE:
 
         def action_run(self) -> None:
             self.run_worker(self._handle_command("/run"), exclusive=False)
+
+        def action_clear_log(self) -> None:
+            self.run_worker(self._handle_command("/clear"), exclusive=False)
 
         async def action_stop_or_quit(self) -> None:
             if self._is_running():

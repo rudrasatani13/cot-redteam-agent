@@ -62,6 +62,15 @@ def test_render_dashboard_smoke() -> None:
     if not RICH_AVAILABLE:
         return
     state = TuiState(status="running", model="xkiro:qwen/qwen3.5-flash")
+    state.ensure_models(["xkiro:qwen/qwen3.5-flash"])
+    state.attempt = 3
+    state.attempts_total = 12
+    state.successes = 1
+    state.failures = 2
+    state.payload_id = "t.csv"
+    state.current_activity = "invent payload t.csv (6/12)"
+    state.last_success = "SUCCESS payload=t.csv\nCOT-REDTEAM-CANARY"
     state.push_activity("payload", "trying direct_override", ok=None)
+    state.push_activity("result", "payload t.csv: SUCCESS", ok=True)
     panel = render_dashboard(state)
     assert panel is not None

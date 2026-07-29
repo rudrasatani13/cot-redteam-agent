@@ -9,6 +9,11 @@
 - Deterministic technique catalog (format, transform, authority, social, …)
   selected from refusal/defense feedback
 
+### Changed
+
+- Polished interactive TUI: darker theme, status badges, attempt progress bar,
+  side-by-side timeline/output, clearer leak panel, command row styling
+
 ### Fixed
 
 - Canary mentioned only while refusing in final text is no longer attack success;
