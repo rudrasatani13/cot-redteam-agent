@@ -114,51 +114,54 @@ if TEXTUAL_AVAILABLE:
             min-height: 3;
             max-height: 4;
         }
-        /* Fixed bottom chrome: full-width type line, no tall-border clipping */
+        /* Bottom chrome: keys line + real 3-line Input (border needs height ≥ 3) */
         #bottom {
-            height: 3;
-            min-height: 3;
-            max-height: 3;
+            dock: bottom;
+            height: 5;
+            min-height: 5;
+            max-height: 5;
             layout: vertical;
-            background: #022c22;
+            background: #042f2e;
             border-top: heavy #2dd4bf;
-            padding: 0;
+            padding: 0 1;
+            layer: overlay;
         }
         #keys-bar {
             height: 1;
-            min-height: 1;
-            max-height: 1;
             color: #99f6e4;
-            background: #022c22;
+            background: #042f2e;
             content-align: left middle;
-            padding: 0 1;
         }
         #command-row {
-            height: 2;
-            min-height: 2;
-            max-height: 2;
+            height: 3;
+            min-height: 3;
+            max-height: 3;
             layout: horizontal;
             background: #042f2e;
-            padding: 0 1;
             align: left middle;
         }
-        /* No separate ❯ widget + tall border (that was half-clipping the box).
-           Input is full width, flat border, one clear typing row. */
+        #cmd-prefix {
+            width: 6;
+            height: 3;
+            color: #5eead4;
+            text-style: bold;
+            content-align: center middle;
+            background: #115e59;
+        }
+        /* Textual Input with border uses 3 rows: top border + text + bottom border */
         #command {
             width: 1fr;
-            height: 1;
-            min-height: 1;
-            max-height: 1;
+            height: 3;
+            min-height: 3;
             background: #134e4a;
             color: #ecfdf5;
-            border: solid #2dd4bf;
+            border: tall #2dd4bf;
             padding: 0 1;
-            margin: 0;
         }
         #command:focus {
             background: #0f766e;
             color: #ffffff;
-            border: solid #5eead4;
+            border: tall #5eead4;
         }
         """
 
@@ -219,14 +222,13 @@ if TEXTUAL_AVAILABLE:
                 yield Static(id="leak")
             with Vertical(id="bottom"):
                 yield Static(
-                    "F5=Run  F1=Help  Ctrl+L=Clear  Ctrl+C=Quit   |   yahan type karo → /run  phir Enter",
+                    "F5=Run   F1=Help   Ctrl+L=Clear   Ctrl+C=Quit   |   type /run then press Enter",
                     id="keys-bar",
                 )
                 with Horizontal(id="command-row"):
-                    # Single full-width input — no side widgets that clip the border
+                    yield Static(" CMD ", id="cmd-prefix")
                     yield Input(
-                        value="",
-                        placeholder=">>> /run",
+                        placeholder="/run",
                         id="command",
                     )
 
