@@ -24,8 +24,10 @@ def test_example_config_validates(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_readme_has_no_unsupported_claims() -> None:
     text = README.read_text(encoding="utf-8").lower()
-    assert "dashboard" not in text
+    # "dashboard" is allowed for the shipped interactive TUI; keep blocking
+    # formats and products this project does not implement.
     assert "parquet" not in text
+    assert "pypi.org" not in text or "not published to pypi" in text
 
 
 def test_help_lists_commands() -> None:

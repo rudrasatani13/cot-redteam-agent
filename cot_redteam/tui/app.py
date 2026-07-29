@@ -45,7 +45,10 @@ async def run_tui(
                     auto_start=auto_start,
                 )
         except Exception as exc:  # pragma: no cover - fallback path
-            print(f"interactive TUI unavailable ({exc}); falling back to live dashboard", file=sys.stderr)
+            print(
+                f"interactive TUI unavailable ({exc}); falling back to live dashboard",
+                file=sys.stderr,
+            )
 
     return await _run_rich_live(
         config,

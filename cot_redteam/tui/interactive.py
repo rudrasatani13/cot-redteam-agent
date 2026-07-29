@@ -159,7 +159,9 @@ if TEXTUAL_AVAILABLE:
         def _apply_session_to_config(self) -> AppConfig:
             cfg = _clone_config(self.session_config)
             models = list(self.state.configured_models) or list(cfg.evaluation.models)
-            attacks = [self.state.attack_id] if self.state.attack_id else list(cfg.evaluation.attacks)
+            attacks = (
+                [self.state.attack_id] if self.state.attack_id else list(cfg.evaluation.attacks)
+            )
             if self.state.effort == "fixed":
                 # Single classic canary prompt.
                 if not attacks or attacks[0].endswith("_adaptive"):

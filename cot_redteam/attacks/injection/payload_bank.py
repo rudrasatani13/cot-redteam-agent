@@ -90,9 +90,7 @@ def _parse_jsonl_text(text: str, *, source_label: str) -> tuple[PayloadTemplate,
         try:
             row = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise ConfigurationError(
-                f"{source_label}:{line_no}: invalid JSON: {exc}"
-            ) from exc
+            raise ConfigurationError(f"{source_label}:{line_no}: invalid JSON: {exc}") from exc
         if not isinstance(row, dict):
             raise ConfigurationError(f"{source_label}:{line_no}: expected a JSON object")
         try:

@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+
 from cot_redteam.core.types import JsonValue
 
 

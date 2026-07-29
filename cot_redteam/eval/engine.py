@@ -463,8 +463,7 @@ class EvaluationEngine:
                     attempts_total=len(prompts),
                     success=assessment.success,
                     message=(
-                        f"payload {payload_id}: "
-                        f"{'SUCCESS' if assessment.success else 'fail'}"
+                        f"payload {payload_id}: {'SUCCESS' if assessment.success else 'fail'}"
                     ),
                     tokens_input=response.usage.input_tokens,
                     tokens_output=response.usage.output_tokens,
@@ -570,11 +569,7 @@ class EvaluationEngine:
                 payload_id=(
                     str(result.prompt.metadata.get("successful_payload_id") or "")
                     if result.prompt and result.prompt.metadata.get("successful_payload_id")
-                    else (
-                        str(result.prompt.metadata.get("payload_id"))
-                        if result.prompt
-                        else None
-                    )
+                    else (str(result.prompt.metadata.get("payload_id")) if result.prompt else None)
                 ),
                 message=result.error or result.status.value,
                 evidence=result.assessment.evidence if result.assessment else (),

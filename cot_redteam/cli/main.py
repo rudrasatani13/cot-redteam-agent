@@ -477,6 +477,7 @@ def cmd_tui(args: argparse.Namespace) -> int:
         auto_start=bool(args.auto_start or args.live_only),
     )
 
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
