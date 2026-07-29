@@ -114,53 +114,50 @@ if TEXTUAL_AVAILABLE:
             min-height: 3;
             max-height: 4;
         }
-        /* Bottom chrome: keys line + real 3-line Input (border needs height ≥ 3) */
+        /* Grok-style composer: thin single-line input + dim key hints under it */
         #bottom {
-            /* no dock — pure stack under #body so nothing clips the input */
-            height: 5;
-            min-height: 5;
-            max-height: 5;
-            layout: vertical;
-            background: #042f2e;
-            border-top: heavy #2dd4bf;
-            padding: 0 1;
-        }
-        #keys-bar {
-            height: 1;
-            color: #99f6e4;
-            background: #042f2e;
-            content-align: left middle;
-        }
-        #command-row {
             height: 3;
             min-height: 3;
             max-height: 3;
-            layout: horizontal;
-            background: #042f2e;
-            align: left middle;
-        }
-        #cmd-prefix {
-            width: 6;
-            height: 3;
-            color: #5eead4;
-            text-style: bold;
-            content-align: center middle;
-            background: #115e59;
-        }
-        /* Textual Input with border uses 3 rows: top border + text + bottom border */
-        #command {
-            width: 1fr;
-            height: 3;
-            min-height: 3;
-            background: #134e4a;
-            color: #ecfdf5;
-            border: tall #2dd4bf;
+            layout: vertical;
+            background: #0b0f14;
+            border-top: solid #27272a;
             padding: 0 1;
         }
+        #command-row {
+            height: 1;
+            min-height: 1;
+            max-height: 1;
+            layout: horizontal;
+            background: #0b0f14;
+            align: left middle;
+            padding: 0;
+        }
+        /* Borderless single-line field — looks like chat composer, not a form brick */
+        #command {
+            width: 1fr;
+            height: 1;
+            min-height: 1;
+            max-height: 1;
+            background: #18181b;
+            color: #fafafa;
+            border: blank;
+            padding: 0 1;
+            margin: 0;
+        }
         #command:focus {
-            background: #0f766e;
+            background: #27272a;
             color: #ffffff;
-            border: tall #5eead4;
+            border: blank;
+        }
+        #keys-bar {
+            height: 1;
+            min-height: 1;
+            max-height: 1;
+            color: #71717a;
+            background: #0b0f14;
+            content-align: left middle;
+            padding: 0 1;
         }
         """
 
@@ -220,16 +217,16 @@ if TEXTUAL_AVAILABLE:
                     yield Static(id="output")
                 yield Static(id="leak")
             with Vertical(id="bottom"):
-                yield Static(
-                    "F5=Run   F1=Help   Ctrl+L=Clear   Ctrl+C=Quit   |   type /run then press Enter",
-                    id="keys-bar",
-                )
+                # Input first (composer), hints under it — like chat UIs
                 with Horizontal(id="command-row"):
-                    yield Static(" CMD ", id="cmd-prefix")
                     yield Input(
                         placeholder="/run",
                         id="command",
                     )
+                yield Static(
+                    "Enter: send   ·   F5: run   ·   F1: help   ·   Ctrl+L: clear   ·   Ctrl+C: quit",
+                    id="keys-bar",
+                )
 
         def on_mount(self) -> None:
             self.title = "CoT Red Team"
