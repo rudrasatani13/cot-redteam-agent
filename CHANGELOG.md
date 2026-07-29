@@ -25,6 +25,8 @@
   require compliant disclosure (own line, structured field, or non-refusal dump)
 - TUI command input no longer uses `border: tall` / squeezed solid frames that
   hid the cursor or painted multi-line left borders
+- Regenerated `requirements-dev.lock` so primary CI installs `rich`/`textual`
+  (hash-locked job was missing TUI deps → CSS import test + coverage floor)
 
 ## 0.4.0 — 2026-07-30
 

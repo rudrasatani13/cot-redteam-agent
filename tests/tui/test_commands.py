@@ -7,11 +7,14 @@ from cot_redteam.tui.commands import CommandKind, parse_command
 
 def test_tui_command_input_css_is_slim_not_tall() -> None:
     """Ultra-slim composer: no side-border glyphs (tall/solid), height-2 chrome."""
-    from cot_redteam.tui.interactive import TEXTUAL_AVAILABLE, RedTeamTuiApp
+    from cot_redteam.tui import interactive as tui_mod
 
-    if not TEXTUAL_AVAILABLE:
+    # RedTeamTuiApp is only defined when textual is importable (CI lock + extras).
+    if not tui_mod.TEXTUAL_AVAILABLE:
         return
-    css = RedTeamTuiApp.CSS
+    app_cls = getattr(tui_mod, "RedTeamTuiApp", None)
+    assert app_cls is not None, "textual is available but RedTeamTuiApp is missing"
+    css = app_cls.CSS
     cmd = re.search(r"#command \{([^}]+)\}", css, re.S)
     row = re.search(r"#command-row \{([^}]+)\}", css, re.S)
     bottom = re.search(r"#bottom \{([^}]+)\}", css, re.S)
