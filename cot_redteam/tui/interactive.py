@@ -11,14 +11,22 @@ from cot_redteam.core.config import AppConfig, validate_config
 from cot_redteam.core.types import RunStatus
 from cot_redteam.eval.events import RunEvent
 from cot_redteam.tui.commands import HELP_TEXT, CommandKind, parse_command
-from cot_redteam.tui.render import RICH_AVAILABLE, render_dashboard
+from cot_redteam.tui.render import (
+    RICH_AVAILABLE,
+    render_header,
+    render_leak,
+    render_model_board,
+    render_now,
+    render_output,
+    render_timeline,
+)
 from cot_redteam.tui.state import TuiState
 
 try:
     from textual import on
     from textual.app import App, ComposeResult
     from textual.binding import Binding
-    from textual.containers import Container
+    from textual.containers import Horizontal, Vertical
     from textual.widgets import Footer, Header, Input, Static
 
     TEXTUAL_AVAILABLE = True
@@ -46,7 +54,7 @@ if TEXTUAL_AVAILABLE:
         """Interactive multi-model adaptive red-team dashboard."""
 
         CSS = """
-        /* Pure vertical stack — no dock race between input and Footer */
+        /* Flex layout: mid (timeline|output) eats remaining height; input always visible */
         Screen {
             layout: vertical;
             background: #0b0f14;
@@ -66,23 +74,58 @@ if TEXTUAL_AVAILABLE:
             height: 1fr;
             layout: vertical;
             min-height: 0;
-        }
-        #dashboard {
-            height: 1fr;
-            background: #0b0f14;
             padding: 0 1;
+            background: #0b0f14;
+        }
+        #hdr {
+            height: auto;
+            min-height: 5;
+            max-height: 7;
+        }
+        #models {
+            height: auto;
+            min-height: 4;
+            max-height: 7;
+        }
+        #now {
+            height: 1;
+            min-height: 1;
+            max-height: 1;
+            padding: 0 1;
+            content-align: left middle;
+        }
+        #mid {
+            height: 1fr;
+            min-height: 8;
+            layout: horizontal;
+        }
+        #timeline {
+            width: 1fr;
+            height: 1fr;
+            min-width: 20;
             overflow-y: auto;
             overflow-x: hidden;
-            min-height: 0;
+        }
+        #output {
+            width: 1fr;
+            height: 1fr;
+            min-width: 20;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+        #leak {
+            height: auto;
+            min-height: 3;
+            max-height: 5;
         }
         #command-row {
             height: 3;
             min-height: 3;
             max-height: 3;
-            padding: 0 1;
             background: #0f172a;
             border-top: heavy #22d3ee;
             align: left middle;
+            padding: 0;
         }
         #command {
             width: 1fr;
@@ -105,12 +148,11 @@ if TEXTUAL_AVAILABLE:
             content-align: center middle;
         }
         #cmd-hint {
-            dock: right;
             width: auto;
             color: #6b7280;
             height: 3;
             content-align: right middle;
-            padding: 0 1 0 0;
+            padding: 0 1;
         }
         """
 
@@ -157,14 +199,18 @@ if TEXTUAL_AVAILABLE:
             self.state.title = "CoT Red Team Agent"
 
         def compose(self) -> ComposeResult:
-            from textual.containers import Horizontal
-
-            # Vertical stack only (no dock:bottom on command-row):
-            # Header → body(dashboard 1fr + command-row 3) → Footer
-            # so the input is always visible above the key-binding footer.
+            # Header
+            # body: hdr | models | now | mid(timeline|output 1fr) | leak | command
+            # Footer
             yield Header(show_clock=True)
-            with Container(id="body"):
-                yield Static(id="dashboard")
+            with Vertical(id="body"):
+                yield Static(id="hdr")
+                yield Static(id="models")
+                yield Static(id="now")
+                with Horizontal(id="mid"):
+                    yield Static(id="timeline")
+                    yield Static(id="output")
+                yield Static(id="leak")
                 with Horizontal(id="command-row"):
                     yield Static("❯", id="cmd-label")
                     yield Input(
@@ -187,14 +233,23 @@ if TEXTUAL_AVAILABLE:
         def _subtitle(self) -> str:
             st = self.state.status
             if st in {"running", "probing", "starting"}:
-                return f"{st} · {self.state.attempt}/{self.state.attempts_total or self.state.max_payloads} · ok {self.state.successes} fail {self.state.failures}"
+                return (
+                    f"{st} · {self.state.attempt}/"
+                    f"{self.state.attempts_total or self.state.max_payloads} · "
+                    f"ok {self.state.successes} fail {self.state.failures}"
+                )
             if self.state.successes:
                 return f"{st} · leak found · ok {self.state.successes}"
             return f"{st} · educational canary red-team"
 
         def _refresh_dashboard(self) -> None:
-            dash = self.query_one("#dashboard", Static)
-            dash.update(render_dashboard(self.state))
+            """Update each region so #mid can flex-fill remaining height."""
+            self.query_one("#hdr", Static).update(render_header(self.state))
+            self.query_one("#models", Static).update(render_model_board(self.state, max_rows=3))
+            self.query_one("#now", Static).update(render_now(self.state))
+            self.query_one("#timeline", Static).update(render_timeline(self.state, limit=50))
+            self.query_one("#output", Static).update(render_output(self.state))
+            self.query_one("#leak", Static).update(render_leak(self.state))
             self.sub_title = self._subtitle()
 
         async def _consume_events(self) -> None:

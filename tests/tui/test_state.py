@@ -3,7 +3,16 @@
 from __future__ import annotations
 
 from cot_redteam.eval.events import RunEvent, RunEventKind
-from cot_redteam.tui.render import RICH_AVAILABLE, render_dashboard
+from cot_redteam.tui.render import (
+    RICH_AVAILABLE,
+    render_dashboard,
+    render_header,
+    render_leak,
+    render_model_board,
+    render_now,
+    render_output,
+    render_timeline,
+)
 from cot_redteam.tui.state import TuiState
 
 
@@ -72,5 +81,10 @@ def test_render_dashboard_smoke() -> None:
     state.last_success = "SUCCESS payload=t.csv\nCOT-REDTEAM-CANARY"
     state.push_activity("payload", "trying direct_override", ok=None)
     state.push_activity("result", "payload t.csv: SUCCESS", ok=True)
-    panel = render_dashboard(state)
-    assert panel is not None
+    assert render_dashboard(state) is not None
+    assert render_header(state) is not None
+    assert render_model_board(state) is not None
+    assert render_now(state) is not None
+    assert render_timeline(state) is not None
+    assert render_output(state) is not None
+    assert render_leak(state) is not None

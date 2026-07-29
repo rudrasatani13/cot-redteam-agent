@@ -1,4 +1,8 @@
-"""Compact single-screen layout for the adaptive red-team TUI."""
+"""Panel renderers for the adaptive red-team TUI.
+
+Interactive mode uses each piece separately so Textual can flex-fill space.
+Live/fallback mode still uses render_dashboard() as a single Group.
+"""
 
 from __future__ import annotations
 
@@ -60,72 +64,7 @@ def _clip(text: str, max_lines: int = 4, max_chars: int = 480) -> str:
     return text
 
 
-def render_model_board(state: TuiState, *, max_rows: int = 4) -> RenderableType:
-    table = Table(
-        expand=True,
-        box=box.SIMPLE_HEAD,
-        show_edge=False,
-        pad_edge=False,
-        header_style="bold dim",
-        padding=(0, 1),
-    )
-    table.add_column("Model", overflow="ellipsis", no_wrap=True, ratio=3)
-    table.add_column("Status", width=10)
-    table.add_column("Try", justify="right", width=4)
-    table.add_column("OK", justify="right", width=3)
-    table.add_column("Fail", justify="right", width=4)
-    table.add_column("Payload", overflow="ellipsis", no_wrap=True, ratio=2)
-    table.add_column("Tok", justify="right", width=9)
-
-    if state.configured_models:
-        models = list(state.configured_models)
-    else:
-        models = list(state.model_board.keys())
-
-    if not models:
-        table.add_row(Text("— no models —", style="dim italic"), "", "", "", "", "", "")
-        return table
-
-    shown = models[:max_rows]
-    for model in shown:
-        row = state.model_board.get(model)
-        if row is None:
-            table.add_row(
-                Text(_short_model(model, 32), style="white"),
-                Text("pending", style="dim"),
-                "0",
-                "0",
-                "0",
-                "—",
-                "0/0",
-            )
-            continue
-        ok_style = "green" if row.successes else "dim"
-        fail_style = "red" if row.failures else "dim"
-        table.add_row(
-            Text(_short_model(row.model, 32), style="white"),
-            Text(row.status, style=_status_style(row.status)),
-            str(row.attempts),
-            Text(str(row.successes), style=ok_style),
-            Text(str(row.failures), style=fail_style),
-            Text(row.last_payload or "—", style="cyan"),
-            f"{row.tokens_in}/{row.tokens_out}",
-        )
-    if len(models) > max_rows:
-        table.add_row(
-            Text(f"… +{len(models) - max_rows} more", style="dim"),
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-        )
-    return table
-
-
-def _header_block(state: TuiState) -> Panel:
-    """Compact 3-line header: identity + progress on one strip."""
+def render_header(state: TuiState) -> RenderableType:
     total = max(1, state.attempts_total or state.max_payloads or 1)
     completed = min(state.attempt, total)
     rate = state.successes / max(1, state.successes + state.failures)
@@ -153,8 +92,6 @@ def _header_block(state: TuiState) -> Panel:
         right.append(f"\n{(state.run_id or '')[:18]}", style="dim")
     top.add_row(left, right)
 
-    prog = Table.grid(expand=True, padding=(0, 1))
-    prog.add_column(ratio=1)
     bar = ProgressBar(total=total, completed=completed, width=40, complete_style="cyan")
     meta = Text.assemble(
         (f"{completed}/{total}", "bold"),
@@ -164,18 +101,14 @@ def _header_block(state: TuiState) -> Panel:
         (f"fail {state.failures}", "red"),
         (" · ", "dim"),
         (f"hit {rate:.0%}", "yellow"),
-        ("  ", "dim"),
     )
-    # one visual row: bar + stats
     strip = Table.grid(expand=True, padding=(0, 1))
     strip.add_column(ratio=1)
     strip.add_column(justify="right", no_wrap=True)
     strip.add_row(bar, meta)
-    prog.add_row(strip)
 
-    body = Group(top, prog)
     return Panel(
-        body,
+        Group(top, strip),
         title=f"[bold white]{state.title}[/]",
         border_style="bright_cyan",
         box=box.ROUNDED,
@@ -183,11 +116,88 @@ def _header_block(state: TuiState) -> Panel:
     )
 
 
-def _activity_feed(state: TuiState, *, limit: int = 5) -> RenderableType:
+def render_model_board(state: TuiState, *, max_rows: int = 4) -> RenderableType:
+    table = Table(
+        expand=True,
+        box=box.SIMPLE_HEAD,
+        show_edge=False,
+        pad_edge=False,
+        header_style="bold dim",
+        padding=(0, 1),
+    )
+    table.add_column("Model", overflow="ellipsis", no_wrap=True, ratio=3)
+    table.add_column("Status", width=10)
+    table.add_column("Try", justify="right", width=4)
+    table.add_column("OK", justify="right", width=3)
+    table.add_column("Fail", justify="right", width=4)
+    table.add_column("Payload", overflow="ellipsis", no_wrap=True, ratio=2)
+    table.add_column("Tok", justify="right", width=9)
+
+    if state.configured_models:
+        models = list(state.configured_models)
+    else:
+        models = list(state.model_board.keys())
+
+    if not models:
+        table.add_row(Text("— no models —", style="dim italic"), "", "", "", "", "", "")
+    else:
+        for model in models[:max_rows]:
+            row = state.model_board.get(model)
+            if row is None:
+                table.add_row(
+                    Text(_short_model(model, 32), style="white"),
+                    Text("pending", style="dim"),
+                    "0",
+                    "0",
+                    "0",
+                    "—",
+                    "0/0",
+                )
+                continue
+            ok_style = "green" if row.successes else "dim"
+            fail_style = "red" if row.failures else "dim"
+            table.add_row(
+                Text(_short_model(row.model, 32), style="white"),
+                Text(row.status, style=_status_style(row.status)),
+                str(row.attempts),
+                Text(str(row.successes), style=ok_style),
+                Text(str(row.failures), style=fail_style),
+                Text(row.last_payload or "—", style="cyan"),
+                f"{row.tokens_in}/{row.tokens_out}",
+            )
+        if len(models) > max_rows:
+            table.add_row(
+                Text(f"… +{len(models) - max_rows} more", style="dim"),
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+            )
+
+    return Panel(
+        table,
+        title="[bold yellow]Models[/]",
+        border_style="yellow",
+        box=box.ROUNDED,
+        padding=(0, 0),
+    )
+
+
+def render_now(state: TuiState) -> RenderableType:
+    return Text.assemble(
+        (" NOW ", "bold cyan reverse"),
+        (" ", ""),
+        (state.current_activity or "…", "bold white"),
+    )
+
+
+def render_timeline(state: TuiState, *, limit: int = 40) -> RenderableType:
     feed = Table.grid(expand=True, padding=(0, 1))
     feed.add_column(style="dim", width=8, no_wrap=True)
     feed.add_column(width=2, no_wrap=True)
-    feed.add_column(ratio=1, overflow="ellipsis", no_wrap=True)
+    feed.add_column(ratio=1, overflow="fold")
 
     lines = state.activity[-limit:]
     if not lines:
@@ -196,74 +206,43 @@ def _activity_feed(state: TuiState, *, limit: int = 5) -> RenderableType:
             Text("·", style="dim"),
             Text("waiting for events…", style="dim italic"),
         )
-        return feed
+    else:
+        for line in lines:
+            local = line.timestamp.astimezone() if line.timestamp.tzinfo else line.timestamp
+            ts = local.strftime("%H:%M:%S")
+            if line.ok is True:
+                mark = Text("✓", style="bold green")
+            elif line.ok is False:
+                mark = Text("✗", style="bold red")
+            else:
+                mark = Text("▸", style="bold yellow")
+            msg = f"{line.kind}: {line.message}"
+            feed.add_row(ts, mark, Text(msg, style="white"))
 
-    for line in lines:
-        local = line.timestamp.astimezone() if line.timestamp.tzinfo else line.timestamp
-        ts = local.strftime("%H:%M:%S")
-        if line.ok is True:
-            mark = Text("✓", style="bold green")
-        elif line.ok is False:
-            mark = Text("✗", style="bold red")
-        else:
-            mark = Text("▸", style="bold yellow")
-        msg = f"{line.kind}: {line.message}"
-        if len(msg) > 72:
-            msg = msg[:71] + "…"
-        feed.add_row(ts, mark, Text(msg, style="white"))
-    return feed
-
-
-def render_dashboard(state: TuiState) -> RenderableType:
-    """Single-viewport dashboard: everything fits without scrolling off-screen."""
-    if not RICH_AVAILABLE:
-        raise RuntimeError("rich is required for the TUI (`pip install rich`)")
-
-    header = _header_block(state)
-
-    board = Panel(
-        render_model_board(state, max_rows=3),
-        title="[bold yellow]Models[/]",
-        border_style="yellow",
-        box=box.ROUNDED,
-        padding=(0, 0),
-    )
-
-    # Single-line "now" strip — no tall empty panel
-    now = Text.assemble(
-        (" NOW ", "bold cyan reverse"),
-        (" ", ""),
-        (state.current_activity or "…", "bold white"),
-    )
-
-    timeline = Panel(
-        _activity_feed(state, limit=6),
+    return Panel(
+        feed,
         title="[bold blue]Timeline[/]",
         border_style="blue",
         box=box.ROUNDED,
         padding=(0, 0),
     )
 
+
+def render_output(state: TuiState) -> RenderableType:
     out_style = "green" if state.successes else "white"
-    output = Panel(
-        Text(
-            _clip(state.last_output or "No model output yet.", max_lines=6, max_chars=420),
-            style=out_style,
-            overflow="fold",
-        ),
+    body = state.last_output or "No model output yet."
+    return Panel(
+        Text(_clip(body, max_lines=80, max_chars=4000), style=out_style, overflow="fold"),
         title="[bold green]Output[/]",
         border_style="green",
         box=box.ROUNDED,
         padding=(0, 1),
     )
 
-    mid = Table.grid(expand=True, padding=(0, 1))
-    mid.add_column(ratio=1)
-    mid.add_column(ratio=1)
-    mid.add_row(timeline, output)
 
+def render_leak(state: TuiState) -> RenderableType:
     if state.last_success and "No successful" not in state.last_success:
-        leak_text = _clip(state.last_success, max_lines=2, max_chars=220)
+        leak_text = _clip(state.last_success, max_lines=3, max_chars=300)
         leak_style = "bold green"
         leak_border = "bright_green"
         leak_title = "[bold bright_green]Leak[/]"
@@ -272,8 +251,7 @@ def render_dashboard(state: TuiState) -> RenderableType:
         leak_style = "dim"
         leak_border = "grey37"
         leak_title = "[dim]Leak[/]"
-
-    leak = Panel(
+    return Panel(
         Text(leak_text, style=leak_style, overflow="ellipsis"),
         title=leak_title,
         border_style=leak_border,
@@ -281,5 +259,19 @@ def render_dashboard(state: TuiState) -> RenderableType:
         padding=(0, 1),
     )
 
-    # Compact stack: fits typical terminals; dashboard remains scrollable if needed.
-    return Group(header, board, now, mid, leak)
+
+def render_dashboard(state: TuiState) -> RenderableType:
+    """Fallback single-paint dashboard (Rich Live / tests)."""
+    if not RICH_AVAILABLE:
+        raise RuntimeError("rich is required for the TUI (`pip install rich`)")
+    mid = Table.grid(expand=True, padding=(0, 1))
+    mid.add_column(ratio=1)
+    mid.add_column(ratio=1)
+    mid.add_row(render_timeline(state, limit=8), render_output(state))
+    return Group(
+        render_header(state),
+        render_model_board(state, max_rows=3),
+        render_now(state),
+        mid,
+        render_leak(state),
+    )
