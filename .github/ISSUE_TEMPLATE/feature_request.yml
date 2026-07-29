@@ -1,0 +1,37 @@
+name: Feature request
+description: Propose a focused improvement or extension
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the concrete workflow or limitation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the smallest useful solution and its public interface.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Could this be implemented as a third-party plugin or configuration change?
+  - type: textarea
+    id: impact
+    attributes:
+      label: Security and operational impact
+      description: Note credential, retention, provider-cost, compatibility, or maintenance implications.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope confirmation
+      options:
+        - label: This request describes implemented user value rather than a speculative integration.
+          required: true

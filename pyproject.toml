@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,12 +8,12 @@ version = "0.2.0"
 description = "Automated Chain-of-Thought Red Teaming Agent"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{name = "Rudra Satani"}]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -28,6 +28,14 @@ dependencies = [
     "pydantic>=2.0",
     "scipy>=1.11",
 ]
+
+[project.urls]
+Homepage = "https://github.com/rudrasatani13/cot-redteam-agent"
+Source = "https://github.com/rudrasatani13/cot-redteam-agent"
+Issues = "https://github.com/rudrasatani13/cot-redteam-agent/issues"
+Changelog = "https://github.com/rudrasatani13/cot-redteam-agent/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/rudrasatani13/cot-redteam-agent#readme"
+Security = "https://github.com/rudrasatani13/cot-redteam-agent/security/policy"
 
 [project.optional-dependencies]
 dev = [

@@ -1,83 +1,162 @@
-# CoT Red Team Agent 0.2
+# CoT Red Team Agent
 
-Open-source CLI and Python API for **Chain-of-Thought red-team evaluation**.
-You supply provider credentials; the tool runs attacks and monitors, records
-failure-aware outcomes, and writes truthful reports.
+[![CI](https://github.com/rudrasatani13/cot-redteam-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/rudrasatani13/cot-redteam-agent/actions/workflows/ci.yml)
+[![Python 3.10–3.13](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-This is an intentional breaking release from `0.1.x`. See
-[docs/migration-0.1-to-0.2.md](docs/migration-0.1-to-0.2.md).
+CoT Red Team Agent is an open-source CLI and Python API for evaluating visible
+LLM reasoning under adversarial prompts. You provide model API credentials or a
+local inference endpoint; the tool plans reproducible experiments, runs attacks
+and monitors, records failure-aware outcomes, and generates auditable reports.
 
-## Install
+Version `0.2.0` is an intentional breaking rewrite of `0.1.x`. Existing users
+should read the [migration guide](docs/migration-0.1-to-0.2.md).
+
+## What it does
+
+- Runs built-in and third-party attacks against one or more target models.
+- Evaluates outputs with regex, LLM-judge, ensemble, and evasion monitors.
+- Distinguishes provider, attack, monitor, budget, and cancellation failures.
+- Tracks request, token, elapsed-time, and estimated-cost budgets.
+- Stores runs transactionally in SQLite with retention-aware redaction.
+- Produces Markdown, CSV, and LaTeX reports with honest eligibility counts.
+- Writes reproducibility manifests and detached artifact checksums.
+- Evolves bounded populations of generated attack templates through the normal
+  evaluation engine.
+
+The tool does not provide a hosted service or guarantee that automated monitors
+represent ground truth.
+
+## Supported providers
+
+| Provider | Configuration kind | Typical use |
+|---|---|---|
+| OpenRouter | `openrouter` | Hosted access to multiple model families |
+| OpenAI | `openai` | OpenAI API models |
+| Anthropic | `anthropic` | Anthropic Messages API models |
+| vLLM | `vllm` | Local or self-hosted OpenAI-compatible server |
+| llama.cpp | `llamacpp` | Local llama.cpp OpenAI-compatible server |
+
+Provider keys are read only from named environment variables. Secrets must not
+be placed directly in YAML files.
+
+## Installation
+
+Python 3.10 through 3.13 is supported.
+
+Install the tagged source release:
 
 ```bash
 # test: command
+python -m pip install "git+https://github.com/rudrasatani13/cot-redteam-agent.git@v0.2.0"
+```
+
+Or install the wheel attached to the GitHub release:
+
+```bash
+python -m pip install \
+  "https://github.com/rudrasatani13/cot-redteam-agent/releases/download/v0.2.0/cot_redteam_agent-0.2.0-py3-none-any.whl"
+```
+
+For development:
+
+```bash
+git clone https://github.com/rudrasatani13/cot-redteam-agent.git
+cd cot-redteam-agent
 python -m pip install -e ".[dev]"
 ```
 
-Or from a built wheel:
-
-```bash
-python -m pip install dist/cot_redteam_agent-0.2.0-py3-none-any.whl
-```
-
-Requires Python 3.10–3.13.
+This release is not published to PyPI.
 
 ## Five-minute quickstart
+
+Create a wheel-safe example configuration:
 
 ```bash
 # test: command
 cot-redteam init --path config.yaml
 export OPENROUTER_API_KEY=your-key
 cot-redteam config validate --config config.yaml
-# cot-redteam run --config config.yaml   # contacts providers
 cot-redteam list-attacks
 cot-redteam list-monitors
 ```
 
-`config.example.yaml` (copied by `init`) configures OpenRouter, OpenAI,
-Anthropic, vLLM, and llama.cpp **without embedding secrets**. Remote providers
-read credentials only from named environment variables.
+The generated configuration uses the packaged `pkg:sample.jsonl` dataset and
+works outside the repository. It includes optional provider examples, but
+validation requires credentials only for providers referenced by the selected
+evaluation and generative models.
 
-## What 0.2 guarantees
+Run the configured evaluation when you are ready to contact the provider:
 
-- Strict YAML configuration (`version: 2`) with unknown-key rejection
-- Stable plugin IDs for attacks and monitors
-- Asynchronous providers with retries and lifecycle close
-- Explicit item statuses: success, provider/attack/monitor error, budget, cancel
-- Monitor `ERROR` / `NOT_RUN` never count as successful evasion
-- Transactional SQLite storage and content-addressed artifacts
-- Markdown, CSV, and LaTeX reports with eligibility denominators
-- Bounded generative attack evolution (no infinite loops, no code execution)
+```bash
+cot-redteam run --config config.yaml
+cot-redteam list-runs --config config.yaml
+```
 
-## Visible reasoning
+Render a report using the `run_id` printed by the run command:
 
-The tool only records **visible** reasoning from:
+```bash
+cot-redteam report \
+  --config config.yaml \
+  --run-id RUN_ID \
+  --format markdown
+```
 
-1. provider-exposed reasoning fields, or
-2. explicit delimiter pairs such as `<think>...</think>`.
+## Visible reasoning and interpretation
 
-Ordinary answer text that contains words like “because” is **not** labeled as
-reasoning. Automated monitors are **not** ground truth.
+The tool records visible reasoning only when it is:
+
+1. exposed in a provider response field; or
+2. enclosed by configured delimiters such as `<think>...</think>`.
+
+Ordinary answer prose is not relabeled as hidden reasoning. Model outputs are
+nondeterministic, automated monitors are imperfect, and attack success does not
+prove a general model vulnerability. Reports preserve failed and excluded
+items so those limitations remain visible.
+
+## Data handling
+
+Prompts, responses, and visible reasoning can contain confidential information.
+Review `evaluation.retain_prompts`, `evaluation.retain_responses`, and
+`evaluation.retain_reasoning` before running against sensitive datasets.
+
+The default configuration retains evaluation traces. Stored SQLite databases,
+artifacts, reports, and generated archives should be protected as sensitive
+research data and must not be committed.
+
+## Responsible use
+
+Use the project only with models, endpoints, datasets, and credentials you are
+authorized to test. Respect provider terms, rate limits, privacy obligations,
+and applicable law. Do not use generated attacks to access third-party systems
+or data without permission.
+
+Model-safety results belong in normal research reports or issues. Suspected
+software vulnerabilities in this repository must be reported privately under
+the [security policy](SECURITY.md).
 
 ## Python API
 
 ```python
 # test: python
 import asyncio
-from cot_redteam.core.config import load_config
+
 from cot_redteam.api import run_evaluation
+from cot_redteam.core.config import load_config
 
 
-async def main():
-    config = load_config("config.example.yaml")
-    # run = await run_evaluation(config)  # requires credentials + network
-    assert config.version == 2
+async def main() -> None:
+    config = load_config("config.yaml")
+    run = await run_evaluation(config)
+    print(run.run_id, run.status.value)
 
 
 asyncio.run(main())
 ```
 
-## CLI commands
+`run_evaluation` contacts configured providers and may incur cost.
+
+## CLI reference
 
 - `cot-redteam init`
 - `cot-redteam config validate|show`
@@ -86,30 +165,37 @@ asyncio.run(main())
 - `cot-redteam list-runs|show-run|report`
 - `cot-redteam evolve`
 
-Exit codes: `0` completed, `1` failed, `2` configuration, `3` partial.
+Exit codes are `0` for completed, `1` for failed, `2` for configuration errors,
+and `3` for partial runs.
 
 ## Documentation
 
-| Guide | Path |
+| Guide | Purpose |
 |---|---|
-| Configuration | [docs/configuration.md](docs/configuration.md) |
-| Providers | [docs/providers.md](docs/providers.md) |
-| Plugins | [docs/plugins.md](docs/plugins.md) |
-| Experiments | [docs/experiments.md](docs/experiments.md) |
-| Migration | [docs/migration-0.1-to-0.2.md](docs/migration-0.1-to-0.2.md) |
-| Release checklist | [docs/release-checklist.md](docs/release-checklist.md) |
+| [Configuration](docs/configuration.md) | Schema, credentials, precedence, and validation |
+| [Providers](docs/providers.md) | Provider-specific behavior and endpoints |
+| [Plugins](docs/plugins.md) | Attack and monitor extension contracts |
+| [Experiments](docs/experiments.md) | Metrics, rates, comparisons, and retention |
+| [Migration](docs/migration-0.1-to-0.2.md) | Breaking changes from `0.1.x` |
+| [Support](SUPPORT.md) | Where to ask questions or report reproducible bugs |
+| [Contributing](CONTRIBUTING.md) | Development and pull-request workflow |
+| [Security](SECURITY.md) | Private vulnerability reporting and scope |
+| [Changelog](CHANGELOG.md) | Version history |
 
 ## Development
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
-pytest
+python -m pip install -e ".[dev]"
+ruff format --check .
 ruff check .
 mypy cot_redteam
+pytest
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete quality gates.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Released under the [MIT License](LICENSE).

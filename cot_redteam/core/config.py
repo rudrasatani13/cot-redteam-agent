@@ -390,6 +390,10 @@ def redacted_config(config: AppConfig) -> dict[str, Any]:
             if isinstance(provider, dict) and provider.get("api_key_env"):
                 # Keep env var name; never materialize secret values.
                 pass
+            if isinstance(provider, dict):
+                headers = provider.get("headers")
+                if isinstance(headers, dict):
+                    provider["headers"] = {str(name): "***REDACTED***" for name in headers}
     return data
 
 

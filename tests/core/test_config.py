@@ -37,6 +37,29 @@ def test_redacted_config_never_contains_secret(
     assert "secret-value" not in canonical_json(redacted_config(config))
 
 
+def test_redacted_config_strips_custom_header_values() -> None:
+    config = load_config(FIXTURES / "config" / "minimal.yaml")
+    provider = config.providers["openrouter"].model_copy(
+        update={
+            "headers": {
+                "Authorization": "Bearer header-secret",
+                "X-Project-Name": "private-project",
+            }
+        }
+    )
+    config = config.model_copy(update={"providers": {**config.providers, "openrouter": provider}})
+
+    redacted = redacted_config(config)
+    serialized = canonical_json(redacted)
+
+    assert "header-secret" not in serialized
+    assert "private-project" not in serialized
+    assert redacted["providers"]["openrouter"]["headers"] == {
+        "Authorization": "***REDACTED***",
+        "X-Project-Name": "***REDACTED***",
+    }
+
+
 def test_local_provider_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     config = load_config(FIXTURES / "config" / "minimal.yaml")

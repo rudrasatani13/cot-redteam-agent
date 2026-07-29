@@ -14,8 +14,13 @@ Intentional breaking rewrite for production-grade CoT red-team evaluation.
 - Transactional SQLite store, atomic artifacts, reproducibility manifests
 - Markdown / CSV / LaTeX report renderers
 - Supported Python API (`run_evaluation`, `load_run`)
-- Bounded generative attack engine with validated `AttackSpec` and lexical novelty
+- Bounded generative evolution evaluated through the standard run engine
+- Per-provider concurrency limits and pricing-based estimated-cost budgets
+- Wheel-safe `init` configuration and packaged 15-sample dataset
+- Retention-aware sanitization before SQLite and artifact persistence
+- Detached manifest checksums and stored report manifests
 - CI for Python 3.10–3.13, coverage floors, wheel smoke tests
+- Security policy, responsible-use guidance, and contributor community files
 
 ### Removed
 
@@ -26,3 +31,8 @@ Intentional breaking rewrite for production-grade CoT red-team evaluation.
 ### Migration
 
 See `docs/migration-0.1-to-0.2.md`.
+
+### Distribution
+
+Release artifacts are distributed through GitHub Releases. Version `0.2.0` is
+not published to PyPI.
