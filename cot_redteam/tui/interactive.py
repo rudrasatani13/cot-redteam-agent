@@ -115,18 +115,17 @@ if TEXTUAL_AVAILABLE:
             max-height: 4;
         }
         /*
-         * Slim chat-style composer:
-         * - no border: tall (that draws 3 stacked lines on the left)
-         * - height 1 input with solid fill so text/cursor stay visible
-         * - thin outer frame on #command-row only
+         * Ultra-slim single-line composer (Codex-style):
+         * - zero borders on input/row (border:solid/tall on height-1 draws
+         *   ugly 3-stack side glyphs — user asked those removed)
+         * - contrast fill only, total chrome = 2 rows (input + keys)
          */
         #bottom {
-            height: 3;
-            min-height: 3;
-            max-height: 3;
+            height: 2;
+            min-height: 2;
+            max-height: 2;
             layout: vertical;
             background: #09090b;
-            border-top: solid #3f3f46;
             padding: 0 1;
         }
         #command-row {
@@ -135,8 +134,8 @@ if TEXTUAL_AVAILABLE:
             max-height: 1;
             layout: horizontal;
             background: #27272a;
-            border: solid #52525b;
-            padding: 0 1;
+            border: none;
+            padding: 0;
             align: left middle;
         }
         #command {
@@ -221,14 +220,14 @@ if TEXTUAL_AVAILABLE:
                     yield Static(id="output")
                 yield Static(id="leak")
             with Vertical(id="bottom"):
-                # height-3 Input is required for Textual to show cursor + placeholder
+                # Single-line Input (height 1) + keys bar — no borders (avoids side glyphs)
                 with Horizontal(id="command-row"):
                     yield Input(
                         placeholder="Type /run here, then press Enter",
                         id="command",
                     )
                 yield Static(
-                    "Enter: send   ·   F5: run   ·   F1: help   ·   Ctrl+L: clear   ·   Ctrl+C: quit",
+                    "Enter: send  ·  F5: run  ·  F1: help  ·  Ctrl+L: clear  ·  Ctrl+C: quit",
                     id="keys-bar",
                 )
 

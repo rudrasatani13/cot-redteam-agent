@@ -6,7 +6,7 @@ from cot_redteam.tui.commands import CommandKind, parse_command
 
 
 def test_tui_command_input_css_is_slim_not_tall() -> None:
-    """Slim composer: no tall 3-line side borders; row frame keeps it visible."""
+    """Ultra-slim composer: no side-border glyphs (tall/solid), height-2 chrome."""
     from cot_redteam.tui.interactive import TEXTUAL_AVAILABLE, RedTeamTuiApp
 
     if not TEXTUAL_AVAILABLE:
@@ -14,11 +14,15 @@ def test_tui_command_input_css_is_slim_not_tall() -> None:
     css = RedTeamTuiApp.CSS
     cmd = re.search(r"#command \{([^}]+)\}", css, re.S)
     row = re.search(r"#command-row \{([^}]+)\}", css, re.S)
-    assert cmd is not None and row is not None
-    assert "border: tall" not in cmd.group(1)
-    assert "border: tall" not in row.group(1)
-    # Outer row keeps a solid frame so the field stays visible.
-    assert "border: solid" in row.group(1)
+    bottom = re.search(r"#bottom \{([^}]+)\}", css, re.S)
+    assert cmd is not None and row is not None and bottom is not None
+    # No border styles that paint multi-line left edges on a height-1 field.
+    for block in (cmd.group(1), row.group(1)):
+        assert "border: tall" not in block
+        assert "border: solid" not in block
+        assert "border: none" in block
+    # Total bottom chrome is 2 rows (input + keys) — not a tall box.
+    assert "height: 2" in bottom.group(1)
 
 
 def test_parse_help_and_aliases() -> None:
