@@ -174,6 +174,8 @@ def build_benchmark_manifest(
     ]
     eligible = sum(outcome.eligible for result in trials for outcome in result.scoring.outcomes)
     outcome_count = sum(len(result.scoring.outcomes) for result in trials)
+    raw_suite_digests = run.metadata.get("suite_digests", {})
+    suite_digests = raw_suite_digests if isinstance(raw_suite_digests, dict) else {}
     manifest: dict[str, JsonValue] = {
         "schema_version": 3,
         "run_id": run.run_id,
@@ -181,7 +183,10 @@ def build_benchmark_manifest(
         "completed_at": _dt_manifest(run.completed_at),
         "config": redacted_config(config),
         "config_digest": sha256_text(canonical_json(redacted_config(config))),
-        "suites": sorted({result.trial.suite_id for result in trials}),
+        "suites": [
+            {"id": suite_id, "digest": suite_digests.get(suite_id)}
+            for suite_id in sorted({result.trial.suite_id for result in trials})
+        ],
         "scenarios": [
             {
                 "id": scenario.id,
@@ -220,6 +225,12 @@ def build_benchmark_manifest(
                 if response.model_revision is not None
             }
         ),
+        "judges": [
+            dict(outcome.judge_metadata)
+            for result in trials
+            for outcome in result.scoring.outcomes
+            if outcome.judge_metadata
+        ],
         "canaries": [dict(result.canary_metadata) for result in trials],
         "outcomes": {
             "eligible": eligible,

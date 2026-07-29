@@ -9,6 +9,7 @@ import yaml
 
 from cot_redteam.core.config import (
     EvaluationSettings,
+    ProviderSettings,
     load_config,
     redacted_config,
     resolve_provider,
@@ -17,6 +18,13 @@ from cot_redteam.core.errors import ConfigurationError
 from cot_redteam.core.serialization import canonical_json
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+
+
+def test_remote_and_generic_provider_require_explicit_connection_settings() -> None:
+    with pytest.raises(ValueError, match="requires api_key_env"):
+        ProviderSettings(kind="openai")
+    with pytest.raises(ValueError, match="require base_url"):
+        ProviderSettings(kind="openai_compatible")
 
 
 def test_load_config_rejects_unknown_keys() -> None:

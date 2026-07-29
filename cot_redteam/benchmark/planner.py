@@ -146,7 +146,10 @@ class BenchmarkPlanner:
                         continue
 
                     target_calls = _target_turn_count(scenario)
-                    judge_calls = sum(
+                    # A judge scorer may evaluate final text and visible reasoning
+                    # independently. Reasoning can be absent at runtime, but preflight
+                    # reserves the maximum so budgets do not undercount.
+                    judge_calls = 2 * sum(
                         1 for scorer in scenario.scorers if scorer.id in self.judge_scorer_ids
                     )
                     for policy_id, technique_id, transformation_id, repetition in product(

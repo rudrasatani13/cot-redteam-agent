@@ -218,8 +218,12 @@ def cmd_dataset_import(args: argparse.Namespace) -> int:
     else:
         result = import_ih_challenge_jsonl(args.input, **kwargs)
     output = Path(args.output)
-    if output.exists():
-        raise ConfigurationError(f"refusing to overwrite existing file: {output}")
+    manifest_path = output.with_suffix(output.suffix + ".manifest.json")
+    existing = [path for path in (output, manifest_path) if path.exists()]
+    if existing:
+        raise ConfigurationError(
+            "refusing to overwrite existing file(s): " + ", ".join(str(path) for path in existing)
+        )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         "\n".join(
@@ -229,7 +233,6 @@ def cmd_dataset_import(args: argparse.Namespace) -> int:
         + "\n",
         encoding="utf-8",
     )
-    manifest_path = output.with_suffix(output.suffix + ".manifest.json")
     manifest_path.write_text(
         json.dumps(result.manifest, indent=2, sort_keys=True),
         encoding="utf-8",

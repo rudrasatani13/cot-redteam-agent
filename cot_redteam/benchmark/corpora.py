@@ -120,7 +120,7 @@ def _benign(family: str, index: int) -> ScenarioSpec:
             ],
             "required_capabilities": ["system_role"],
             "policy_ids": ["policy.hierarchy"],
-            "technique_ids": ["technique.direct_extraction"],
+            "technique_ids": ["technique.none"],
             "transformation_ids": ["transform.identity"],
             "scorers": [
                 {"id": "scorer.utility.expected_output"},

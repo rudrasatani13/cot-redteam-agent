@@ -24,6 +24,7 @@ def test_benchmark_manifest_has_versions_digests_and_no_raw_canary(
     text = str(manifest)
 
     assert manifest["schema_version"] == 3
+    assert manifest["suites"][0]["id"] == "suite.test"
     assert manifest["scenarios"][0]["digest"]
     assert manifest["policies"][0]["version"] == "1.0.0"
     assert manifest["techniques"][0]["version"] == "1.0.0"

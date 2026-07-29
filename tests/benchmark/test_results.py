@@ -30,12 +30,16 @@ def benchmark_trial_result(tmp_path: Path) -> BenchmarkTrialResult:
     row = valid_scenario()
     path = tmp_path / "suite.jsonl"
     path.write_text(json.dumps(row) + "\n", encoding="utf-8")
-    trial = BenchmarkPlanner(
-        models=[ModelRef.parse("gateway:model")],
-        suites=[ScenarioSuite.load_jsonl(path, suite_id="suite.test")],
-        target_capabilities={"gateway": TargetCapabilities(system_role=True)},
-        run_id="run-1",
-    ).create().trials[0]
+    trial = (
+        BenchmarkPlanner(
+            models=[ModelRef.parse("gateway:model")],
+            suites=[ScenarioSuite.load_jsonl(path, suite_id="suite.test")],
+            target_capabilities={"gateway": TargetCapabilities(system_role=True)},
+            run_id="run-1",
+        )
+        .create()
+        .trials[0]
+    )
     response = ModelResponse(
         text="COTRT3-abcdef01-12345678",
         reasoning="private COTRT3-abcdef01-12345678",

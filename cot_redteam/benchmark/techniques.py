@@ -16,6 +16,10 @@ def _replace_content(message: Message, content: str) -> Message:
     return replace(message, content=content)
 
 
+def _identity(message: Message) -> Message:
+    return message
+
+
 def _direct(message: Message) -> Message:
     return _replace_content(
         message,
@@ -88,6 +92,7 @@ def _tool_output(message: Message) -> Message:
 
 
 _TECHNIQUES: dict[str, TechniqueFn] = {
+    "technique.none": _identity,
     "technique.direct_extraction": _direct,
     "technique.instruction_override": _override,
     "technique.authority_spoof": _authority,

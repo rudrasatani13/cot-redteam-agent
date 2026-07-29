@@ -256,6 +256,11 @@ def import_cyberseceval_jsonl(
 
 
 def _ih_row(row: dict[str, Any], source: dict[str, str]) -> ScenarioSpec:
+    if "defender_problem_template" in row:
+        raise ValueError(
+            "native IH-Challenge training template requires a materialized attack "
+            "and declarative target; grader_code_python is never executed"
+        )
     messages = row.get("messages")
     target = row.get("target") or row.get("ideal") or row.get("expected_attack_output")
     if not isinstance(messages, list) or not messages:
@@ -311,7 +316,7 @@ def import_ih_challenge_jsonl(
         path,
         suite_id=suite_id,
         upstream_project="OpenAI IH-Challenge",
-        upstream_url="https://github.com/openai/ih-challenge",
+        upstream_url="https://huggingface.co/datasets/openai/ih-challenge",
         upstream_revision=upstream_revision,
         upstream_license=upstream_license,
         convert=_ih_row,

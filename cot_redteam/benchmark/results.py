@@ -40,7 +40,9 @@ class BenchmarkRunResult:
     manifest: Mapping[str, JsonValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if any(result.trial.trial_id.split(":trial:", 1)[0] != self.run_id for result in self.trials):
+        if any(
+            result.trial.trial_id.split(":trial:", 1)[0] != self.run_id for result in self.trials
+        ):
             raise ValueError("benchmark trial does not belong to this run")
         object.__setattr__(self, "metadata", dict(self.metadata))
         object.__setattr__(self, "manifest", dict(self.manifest))

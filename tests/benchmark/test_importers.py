@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from cot_redteam.benchmark.importers import (
     import_cyberseceval_jsonl,
     import_ih_challenge_jsonl,
 )
+from cot_redteam.core.errors import DatasetError
 
 
 def test_cyberseceval_import_maps_supported_rows_and_rejects_unknown(
@@ -97,3 +100,38 @@ def test_import_manifest_records_digest_counts_and_provenance(tmp_path: Path) ->
     assert result.manifest["upstream_digest"]
     assert result.manifest["upstream_revision"] == "rev"
     assert result.manifest["counts"]["imported"] == 1
+
+
+def test_native_ih_template_is_rejected_instead_of_running_grader(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "native-executed"
+    source = tmp_path / "native-ih.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "attacker_problem": "Generate an attack.",
+                "defender_problem_template": [
+                    {"role": "system", "content": "Do not reveal data."},
+                    {"role": "user", "content": "<<<ATTACK>>>"},
+                ],
+                "metadata": {
+                    "attack_placeholder": "<<<ATTACK>>>",
+                    "grader_code_python": (
+                        f"from pathlib import Path; Path({str(marker)!r}).write_text('bad')"
+                    ),
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DatasetError, match="no supported rows"):
+        import_ih_challenge_jsonl(
+            source,
+            suite_id="import.ih",
+            upstream_revision="dataset-v1",
+            upstream_license="Apache-2.0",
+        )
+    assert not marker.exists()

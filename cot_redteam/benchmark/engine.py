@@ -97,7 +97,7 @@ class BenchmarkEngine:
                         parts.append(value)
                 if not parts:
                     continue
-                async with self._provider_semaphore(judge_model.provider):
+                async with self._global, self._provider_semaphore(judge_model.provider):
                     results.append(
                         await run_judge(
                             JudgeRequest(

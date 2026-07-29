@@ -145,5 +145,5 @@ def test_planner_counts_judge_requests_separately(tmp_path: Path) -> None:
     ).create()
 
     assert plan.preflight.target_requests_max == 1
-    assert plan.preflight.judge_requests_max == 1
-    assert plan.preflight.total_requests_max == 2
+    assert plan.preflight.judge_requests_max == 2
+    assert plan.preflight.total_requests_max == 3

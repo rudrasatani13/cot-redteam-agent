@@ -186,6 +186,7 @@ async def run_benchmark(
         trials=sanitized,
         metadata={
             "config_digest": config_digest(config),
+            "suite_digests": {suite.id: suite.digest for suite in suites},
             "preflight": {
                 "target_requests_min": plan.preflight.target_requests_min,
                 "target_requests_max": plan.preflight.target_requests_max,

@@ -44,7 +44,13 @@ def _sanitize_outcome(
         if outcome.channel is EvidenceChannel.FINAL
         else settings.retain_reasoning
     )
-    return replace(outcome, evidence=outcome.evidence if retain_evidence else ())
+    return replace(
+        outcome,
+        evidence=outcome.evidence if retain_evidence else (),
+        explanation=(
+            outcome.explanation if retain_evidence or not outcome.judge_metadata else _REDACTED
+        ),
+    )
 
 
 def sanitize_trial_result(
@@ -76,21 +82,29 @@ def sanitize_trial_result(
     )
     scoring = TranscriptScoring(
         trial_id=result.scoring.trial_id,
-        outcomes=tuple(
-            _sanitize_outcome(outcome, settings) for outcome in result.scoring.outcomes
-        ),
+        outcomes=tuple(_sanitize_outcome(outcome, settings) for outcome in result.scoring.outcomes),
     )
-    judges = tuple(
-        JudgeResult(
-            outcome=_sanitize_outcome(judge.outcome, settings),
-            raw_input=judge.raw_input if settings.retain_prompts else _REDACTED,
-            raw_output=judge.raw_output if settings.retain_responses else None,
+    judges: list[JudgeResult] = []
+    for judge in result.judge_results:
+        retain_subject = (
+            settings.retain_responses
+            if judge.outcome.channel is EvidenceChannel.FINAL
+            else settings.retain_reasoning
         )
-        for judge in result.judge_results
-    )
+        judges.append(
+            JudgeResult(
+                outcome=_sanitize_outcome(judge.outcome, settings),
+                raw_input=(
+                    judge.raw_input if settings.retain_prompts and retain_subject else _REDACTED
+                ),
+                raw_output=(
+                    judge.raw_output if settings.retain_responses and retain_subject else None
+                ),
+            )
+        )
     return replace(
         result,
         transcript=transcript,
         scoring=scoring,
-        judge_results=judges,
+        judge_results=tuple(judges),
     )
