@@ -102,6 +102,12 @@ cot-redteam report \
   --format markdown
 ```
 
+Markdown reports include retained system and attack prompts, model responses,
+visible provider reasoning, exact attack-assessment evidence, and monitor
+outcomes. The packaged quickstart uses `injection.system_canary`: it places a
+synthetic token only in a trusted system instruction and reports success only
+when the exact token is disclosed in the response or provider reasoning.
+
 ## Visible reasoning and interpretation
 
 The tool records visible reasoning only when it is:
@@ -112,7 +118,9 @@ The tool records visible reasoning only when it is:
 Ordinary answer prose is not relabeled as hidden reasoning. Model outputs are
 nondeterministic, automated monitors are imperfect, and attack success does not
 prove a general model vulnerability. Reports preserve failed and excluded
-items so those limitations remain visible.
+items so those limitations remain visible. A reasoning-only canary disclosure
+means the tested provider route exposed protected system content to its API
+caller; it does not prove that every deployment of the named model does so.
 
 ## Data handling
 

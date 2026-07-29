@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 
 from cot_redteam.reporting.model import ReportModel
 
@@ -29,6 +30,13 @@ def _csv_neutralize(value: str) -> str:
     if value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + value
     return value
+
+
+def _markdown_code(value: str | None) -> list[str]:
+    if value is None:
+        return ["    (not retained or unavailable)"]
+    lines = value.splitlines() or [""]
+    return [f"    {line}" for line in lines]
 
 
 def render_markdown(report: ReportModel) -> str:
@@ -57,6 +65,79 @@ def render_markdown(report: ReportModel) -> str:
         lines.extend(f"- {item}" for item in report.limitations)
     else:
         lines.append("- None recorded")
+    lines.extend(["", "## Evaluation Evidence", ""])
+    for index, item in enumerate(report.items, start=1):
+        lines.extend(
+            [
+                f"### Item {index}: {item.sample_id}",
+                "",
+                f"- **Status:** {item.status.value}",
+                f"- **Model:** {item.model}",
+                f"- **Attack:** {item.attack_id}",
+            ]
+        )
+        if item.error:
+            lines.extend(["- **Error:**", "", *_markdown_code(item.error), ""])
+        if item.prompt is not None:
+            lines.extend(
+                [
+                    "",
+                    "#### System Prompt",
+                    "",
+                    *_markdown_code(item.prompt.system_prompt),
+                    "",
+                    "#### Attack Prompt",
+                    "",
+                    *_markdown_code(item.prompt.text),
+                ]
+            )
+        if item.response is not None:
+            lines.extend(
+                [
+                    "",
+                    "#### Response",
+                    "",
+                    *_markdown_code(item.response.text),
+                    "",
+                    f"- **Reasoning source:** {item.response.reasoning_source.value}",
+                    f"- **Tokens (input/output/total):** {item.response.usage.input_tokens} / "
+                    f"{item.response.usage.output_tokens} / {item.response.usage.total_tokens}",
+                    "",
+                    "#### Visible Provider Reasoning",
+                    "",
+                    *_markdown_code(item.response.reasoning),
+                ]
+            )
+        if item.assessment is not None:
+            evidence = item.assessment.evidence or ("None",)
+            lines.extend(
+                [
+                    "",
+                    "#### Attack Assessment",
+                    "",
+                    f"- **Success:** {str(item.assessment.success).lower()}",
+                    f"- **Score:** {item.assessment.score:.3f}",
+                    f"- **Explanation:** {item.assessment.explanation or 'None'}",
+                    "- **Evidence:**",
+                    *(f"  - {entry}" for entry in evidence),
+                ]
+            )
+        lines.extend(["", "#### Monitor Outcomes", ""])
+        if not item.monitors:
+            lines.append("- None")
+        for outcome in item.monitors:
+            confidence = "N/A" if outcome.confidence is None else f"{outcome.confidence:.3f}"
+            details = json.dumps(outcome.details, ensure_ascii=False, sort_keys=True)
+            lines.extend(
+                [
+                    f"- **{outcome.monitor_id}:** {outcome.status.value} "
+                    f"(confidence={confidence}) — {outcome.explanation}",
+                    "  - Details:",
+                    "",
+                    *_markdown_code(details),
+                ]
+            )
+        lines.append("")
     lines.append("")
     return "\n".join(lines)
 

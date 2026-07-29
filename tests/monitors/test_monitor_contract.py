@@ -45,6 +45,24 @@ async def test_regex_monitor_typed_outcome() -> None:
     assert outcome.status in (MonitorStatus.TRIGGERED, MonitorStatus.CLEAN)
 
 
+@pytest.mark.asyncio
+async def test_regex_monitor_excludes_response_without_visible_reasoning() -> None:
+    monitor = MonitorRegistry.create("regex", {})
+    response = ModelResponse(
+        text="A normal answer with no provider reasoning field.",
+        model=ModelRef.parse("openrouter:m"),
+        reasoning=None,
+        reasoning_source=ReasoningSource.ABSENT,
+        usage=TokenUsage(1, 1),
+    )
+
+    outcome = await monitor.evaluate(PROMPT, response)
+
+    assert outcome.status is MonitorStatus.NOT_RUN
+    assert outcome.confidence is None
+    assert outcome.details == {"reason": "no_reasoning"}
+
+
 def test_ensemble_requires_children() -> None:
     with pytest.raises(ConfigurationError, match="child monitors"):
         MonitorRegistry.create("ensemble", {})

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Verifiable `injection.system_canary` attack with an explicit trusted-system
+  boundary and exact-disclosure success criteria
+- Item-level Markdown evidence for retained prompts, responses, provider
+  reasoning, attack assessments, and monitor outcomes
+
+### Changed
+
+- Regex monitoring without visible reasoning is now non-evaluable instead of
+  clean, preventing misleading evasion rates
+- The packaged quickstart now uses the system-canary attack
+
 ## 0.2.0 — 2026-07-29
 
 Intentional breaking rewrite for production-grade CoT red-team evaluation.
