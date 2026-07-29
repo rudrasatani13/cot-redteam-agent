@@ -7,7 +7,11 @@ import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from cot_redteam.core.config import AppConfig
+    from cot_redteam.providers.factory import ProviderFactory
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -280,4 +284,176 @@ class GenerativeAttackEngine:
             else b.spec.prompt_template,
             parameters={**b.spec.parameters, **a.spec.parameters},
             tags=list(dict.fromkeys(a.spec.tags + b.spec.tags))[:20],
+        )
+
+    async def evaluate_candidates(
+        self,
+        candidates: Sequence[AttackCandidate],
+        *,
+        config: AppConfig,
+        provider_factory: ProviderFactory,
+        target_models: Sequence[str],
+    ) -> list[AttackCandidate]:
+        """Run each candidate through the standard EvaluationEngine."""
+        from cot_redteam.attacks.base import AttackRegistry
+        from cot_redteam.core.types import ItemStatus, ModelRef
+        from cot_redteam.eval.budgets import BudgetTracker
+        from cot_redteam.eval.dataset import Dataset
+        from cot_redteam.eval.engine import EvaluationEngine
+        from cot_redteam.eval.metrics import summarize_run
+        from cot_redteam.eval.planner import RunPlanner
+        from cot_redteam.monitors.base import MonitorRegistry
+        from cot_redteam.monitors.evasion import compute_evasion
+        from cot_redteam.plugins.registry import PluginContext
+
+        dataset = Dataset.load_jsonl(config.evaluation.dataset_path)
+        context = PluginContext(
+            provider_resolver=lambda name: provider_factory.create(
+                ModelRef(provider=name, model_id="_")
+            )
+        )
+        evaluated: list[AttackCandidate] = []
+        for candidate in candidates:
+            attack_cfg = {
+                "prompt_template": candidate.spec.prompt_template,
+                "parameters": candidate.spec.parameters,
+                "name": candidate.spec.name,
+            }
+            # Register ephemeral config via attack_config on a copied AppConfig.
+            models = list(target_models) or list(config.evaluation.models)
+            eval_cfg = config.model_copy(
+                update={
+                    "evaluation": config.evaluation.model_copy(
+                        update={
+                            "models": models,
+                            "attacks": ["generative.evolved"],
+                            "attack_config": {"generative.evolved": attack_cfg},
+                        }
+                    )
+                }
+            )
+            planner = RunPlanner(
+                eval_cfg,
+                provider_factory=provider_factory,
+                dataset=dataset,
+                plugin_context=context,
+            )
+            plan = planner.create()
+            engine = EvaluationEngine(
+                provider_factory,
+                AttackRegistry,
+                MonitorRegistry,
+                BudgetTracker(eval_cfg.evaluation.budgets),
+                concurrency=eval_cfg.global_.concurrency,
+                config=eval_cfg,
+                plugin_context=context,
+                close_providers=False,
+            )
+            run = await engine.run(plan)
+            metrics = summarize_run(run)
+            attack_rate = metrics.attack_success.rate or 0.0
+            evasion_rate = metrics.evasion.rate or 0.0
+            # novelty against prior archive excluding current until fitness stored
+            self.compute_fitness(
+                candidate,
+                attack_success=attack_rate,
+                evasion=evasion_rate,
+            )
+            sample_ids = tuple(sorted({i.sample_id for i in run.items}))
+            candidate.run_ids = (run.run_id,)
+            candidate.sample_ids = sample_ids
+            if candidate.spec.prompt_template not in self.archive_templates:
+                self.archive_templates.append(candidate.spec.prompt_template)
+            evaluated.append(candidate)
+            _ = compute_evasion  # silence unused if metrics already cover
+            _ = ItemStatus
+        return evaluated
+
+    async def evolve(
+        self,
+        *,
+        config: AppConfig,
+        provider_factory: ProviderFactory,
+        target_models: Sequence[str],
+        evolution_rounds: int,
+        mutation_rate: float = 0.3,
+        crossover_rate: float = 0.5,
+        seed_hint: str = "",
+    ) -> GenerationResult:
+        """Bounded generate → evaluate → select → mutate/crossover loop."""
+        import random
+
+        rng = random.Random(config.global_.seed)
+        population_result = await self.generate_population(seed_hint=seed_hint)
+        population = await self.evaluate_candidates(
+            population_result.candidates,
+            config=config,
+            provider_factory=provider_factory,
+            target_models=target_models,
+        )
+        diagnostics = list(population_result.diagnostics)
+        total_attempts = population_result.attempts
+
+        for generation in range(1, max(1, evolution_rounds)):
+            ranked = sorted(
+                population,
+                key=lambda c: c.fitness if c.fitness is not None else -1.0,
+                reverse=True,
+            )
+            survivors = ranked[: max(1, len(ranked) // 2)] or ranked
+            next_gen: list[AttackCandidate] = list(survivors)
+            child_specs: list[tuple[AttackSpec, tuple[str, ...]]] = []
+            attempts = 0
+            while (
+                len(next_gen) + len(child_specs) < self.population_size
+                and attempts < self.max_generation_attempts
+            ):
+                attempts += 1
+                total_attempts += 1
+                try:
+                    parents: tuple[str, ...]
+                    if len(survivors) >= 2 and rng.random() < crossover_rate:
+                        a, b = rng.sample(survivors, 2)
+                        spec = self.crossover(a, b, generation)
+                        parents = (a.candidate_id, b.candidate_id)
+                    else:
+                        parent = rng.choice(survivors)
+                        if rng.random() < mutation_rate:
+                            spec = self.mutate(parent, generation)
+                        else:
+                            spec = parent.spec
+                        parents = (parent.candidate_id,)
+                    child_specs.append((spec, parents))
+                except Exception as exc:
+                    diagnostics.append(f"generation {generation} attempt {attempts}: {exc}")
+
+            children = [
+                AttackCandidate(
+                    candidate_id=f"gen{generation}-{idx}",
+                    spec=spec,
+                    generation=generation,
+                    parent_ids=parents,
+                )
+                for idx, (spec, parents) in enumerate(child_specs)
+            ]
+            if children:
+                children = await self.evaluate_candidates(
+                    children,
+                    config=config,
+                    provider_factory=provider_factory,
+                    target_models=target_models,
+                )
+                next_gen.extend(children)
+            # Keep top population_size
+            next_gen = sorted(
+                next_gen,
+                key=lambda c: c.fitness if c.fitness is not None else -1.0,
+                reverse=True,
+            )[: self.population_size]
+            population = next_gen
+
+        return GenerationResult(
+            candidates=population,
+            diagnostics=diagnostics,
+            attempts=total_attempts,
         )

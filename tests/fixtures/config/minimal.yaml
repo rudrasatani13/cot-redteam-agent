@@ -20,7 +20,7 @@ evaluation:
     - injection.cot_injection
   monitors:
     - regex
-  dataset_path: cot_redteam/eval/datasets/sample.jsonl
+  dataset_path: pkg:sample.jsonl
   sample_count: 2
   budgets:
     max_requests: 10

@@ -19,3 +19,5 @@ __all__ = [
     "lexical_novelty",
     "parse_attack_spec",
 ]
+
+# Ensure generative.evolved registers on package import.

@@ -93,7 +93,14 @@ class SQLiteRunStore:
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.execute("PRAGMA journal_mode = WAL")
+        self._closed = False
         self._migrate()
+
+    def __enter__(self) -> SQLiteRunStore:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def _migrate(self) -> None:
         self.connection.execute(
@@ -294,8 +301,21 @@ class SQLiteRunStore:
             )
         return result
 
+    def get_manifest(self, run_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT manifest_json FROM runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None or row["manifest_json"] is None:
+            return None
+        data = json.loads(row["manifest_json"])
+        return data if isinstance(data, dict) else None
+
     def close(self) -> None:
+        if getattr(self, "_closed", False):
+            return
         self.connection.close()
+        self._closed = True
 
     @staticmethod
     def _prompt_from_json(raw: str) -> AttackPrompt:

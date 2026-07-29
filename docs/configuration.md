@@ -24,9 +24,9 @@ Local kinds `vllm` and `llamacpp` may omit credentials.
 
 ## Precedence
 
-1. schema defaults  
-2. YAML file  
-3. documented CLI overrides  
+1. schema defaults
+2. YAML file
+3. documented CLI overrides
 
 Environment variables supply secrets only.
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import shutil
 import sys
 import traceback
 from collections.abc import Sequence
@@ -14,13 +13,14 @@ from pathlib import Path
 from cot_redteam import __version__
 from cot_redteam.api import run_evaluation
 from cot_redteam.attacks.base import AttackRegistry
-from cot_redteam.core.config import load_config, redacted_config, resolve_provider
+from cot_redteam.core.config import load_config, redacted_config, validate_config
 from cot_redteam.core.errors import ConfigurationError, CotRedTeamError, PluginError
 from cot_redteam.core.serialization import canonical_json
 from cot_redteam.core.types import RunStatus
 from cot_redteam.monitors.base import MonitorRegistry
 from cot_redteam.plugins.bootstrap import bootstrap_plugins
 from cot_redteam.reporting.report import ReportFormat, ReportWriter
+from cot_redteam.resources import read_example_config_text
 from cot_redteam.storage.sqlite import SQLiteRunStore
 
 EXIT_OK = 0
@@ -83,44 +83,21 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _example_config_source() -> Path:
-    # Prefer package-adjacent example
-    root = Path(__file__).resolve().parents[2]
-    candidate = root / "config.example.yaml"
-    if candidate.exists():
-        return candidate
-    return Path("config.example.yaml")
-
-
 def cmd_init(args: argparse.Namespace) -> int:
     dest = Path(args.path)
     if dest.exists() and not args.force:
         print(f"refusing to overwrite existing file: {dest}", file=sys.stderr)
         return EXIT_CONFIG
-    src = _example_config_source()
-    if not src.exists():
-        print(f"example config not found: {src}", file=sys.stderr)
-        return EXIT_CONFIG
+    text = read_example_config_text()
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dest)
+    dest.write_text(text, encoding="utf-8")
     print(f"wrote {dest}")
     return EXIT_OK
 
 
 def cmd_config_validate(args: argparse.Namespace) -> int:
-    config = load_config(args.path if hasattr(args, "path") else args.config)
-    # Resolve remote providers to ensure secrets exist.
-    for name, settings in config.providers.items():
-        if settings.kind in ("vllm", "llamacpp"):
-            continue
-        resolve_provider(config, name)
-    bootstrap_plugins()
-    for attack_id in config.evaluation.attacks:
-        if attack_id not in AttackRegistry:
-            raise PluginError(f"unknown attack {attack_id}")
-    for monitor_id in config.evaluation.monitors:
-        if monitor_id not in MonitorRegistry:
-            raise PluginError(f"unknown monitor {monitor_id}")
+    config = load_config(args.config)
+    validate_config(config, require_credentials=True)
     print("configuration valid")
     return EXIT_OK
 
@@ -146,7 +123,6 @@ def cmd_list_monitors(_: argparse.Namespace) -> int:
 
 
 def cmd_list_providers(args: argparse.Namespace) -> int:
-    # Providers are config-scoped; without config list supported kinds.
     print("openrouter")
     print("openai")
     print("anthropic")
@@ -162,6 +138,7 @@ async def _run_async(args: argparse.Namespace) -> int:
     if args.seed is not None:
         overrides["global.seed"] = args.seed
     config = load_config(args.config, overrides=overrides or None)
+    validate_config(config, require_credentials=True)
     run = await run_evaluation(config)
     print(
         f"run_id={run.run_id} status={run.status.value} "
@@ -181,54 +158,55 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_list_runs(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    store = SQLiteRunStore(config.storage.path)
-    for row in store.list_runs(limit=args.limit):
-        print(
-            f"{row['run_id']}\t{row['status']}\t"
-            f"succeeded={row['summary'].get('succeeded')}/"
-            f"{row['summary'].get('planned')}"
-        )
+    with SQLiteRunStore(config.storage.path) as store:
+        for row in store.list_runs(limit=args.limit):
+            print(
+                f"{row['run_id']}\t{row['status']}\t"
+                f"succeeded={row['summary'].get('succeeded')}/"
+                f"{row['summary'].get('planned')}"
+            )
     return EXIT_OK
 
 
 def cmd_show_run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    store = SQLiteRunStore(config.storage.path)
-    run = store.get(args.run_id)
-    if run is None:
-        print(f"run not found: {args.run_id}", file=sys.stderr)
-        return EXIT_CONFIG
-    print(
-        json.dumps(
-            {
-                "run_id": run.run_id,
-                "status": run.status.value,
-                "summary": {
-                    "planned": run.summary.planned,
-                    "succeeded": run.summary.succeeded,
-                    "failed": run.summary.failed,
-                    "cancelled": run.summary.cancelled,
-                    "monitor_excluded": run.summary.monitor_excluded,
+    with SQLiteRunStore(config.storage.path) as store:
+        run = store.get(args.run_id)
+        if run is None:
+            print(f"run not found: {args.run_id}", file=sys.stderr)
+            return EXIT_CONFIG
+        print(
+            json.dumps(
+                {
+                    "run_id": run.run_id,
+                    "status": run.status.value,
+                    "summary": {
+                        "planned": run.summary.planned,
+                        "succeeded": run.summary.succeeded,
+                        "failed": run.summary.failed,
+                        "cancelled": run.summary.cancelled,
+                        "monitor_excluded": run.summary.monitor_excluded,
+                    },
+                    "items": len(run.items),
                 },
-                "items": len(run.items),
-            },
-            indent=2,
+                indent=2,
+            )
         )
-    )
     return EXIT_OK
 
 
 def cmd_report(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    store = SQLiteRunStore(config.storage.path)
-    run = store.get(args.run_id)
-    if run is None:
-        print(f"run not found: {args.run_id}", file=sys.stderr)
-        return EXIT_CONFIG
-    output_dir = args.output_dir or config.reporting.output_dir
-    writer = ReportWriter(output_dir)
-    path = writer.write(run, ReportFormat(args.format))
-    print(str(path))
+    with SQLiteRunStore(config.storage.path) as store:
+        run = store.get(args.run_id)
+        if run is None:
+            print(f"run not found: {args.run_id}", file=sys.stderr)
+            return EXIT_CONFIG
+        manifest = store.get_manifest(args.run_id) or {}
+        output_dir = args.output_dir or config.reporting.output_dir
+        writer = ReportWriter(output_dir)
+        path = writer.write(run, ReportFormat(args.format), manifest=manifest)
+        print(str(path))
     return EXIT_OK
 
 
@@ -239,7 +217,15 @@ async def _evolve_async(args: argparse.Namespace) -> int:
     from cot_redteam.storage.artifacts import ArtifactStore
 
     config = load_config(args.config)
+    validate_config(config, require_credentials=True)
     generator = ModelRef.parse(args.generator_model or config.generative.generator_model)
+    targets = (
+        [args.target_model]
+        if args.target_model
+        else (config.generative.target_models or list(config.evaluation.models))
+    )
+    if not targets:
+        raise ConfigurationError("evolve requires --target-model or generative.target_models")
     factory = ProviderFactory(config)
     try:
         provider = factory.create(generator)
@@ -250,7 +236,14 @@ async def _evolve_async(args: argparse.Namespace) -> int:
             population_size=config.generative.population_size,
             fitness_weights=config.generative.fitness_weights,
         )
-        result = await engine.generate_population()
+        result = await engine.evolve(
+            config=config,
+            provider_factory=factory,
+            target_models=targets,
+            evolution_rounds=config.generative.evolution_rounds,
+            mutation_rate=config.generative.mutation_rate,
+            crossover_rate=config.generative.crossover_rate,
+        )
         archive = {
             "version": 1,
             "candidates": [
@@ -258,6 +251,11 @@ async def _evolve_async(args: argparse.Namespace) -> int:
                     "id": c.candidate_id,
                     "spec": c.spec.model_dump(),
                     "generation": c.generation,
+                    "parent_ids": list(c.parent_ids),
+                    "fitness": c.fitness,
+                    "components": c.components,
+                    "run_ids": list(c.run_ids),
+                    "sample_ids": list(c.sample_ids),
                 }
                 for c in result.candidates
             ],
@@ -266,11 +264,20 @@ async def _evolve_async(args: argparse.Namespace) -> int:
         }
         store = ArtifactStore(config.artifacts.root)
         path = store.write_text(
-            "generative_archive.json",
+            Path(config.generative.archive_path).name
+            if Path(config.generative.archive_path).name
+            else "generative_archive.json",
             json.dumps(archive, indent=2, sort_keys=True),
             media_type="application/json",
         ).absolute_path
-        print(f"candidates={len(result.candidates)} attempts={result.attempts} archive={path}")
+        # Also write to configured archive path when absolute/relative differs
+        archive_path = Path(config.generative.archive_path)
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        archive_path.write_text(json.dumps(archive, indent=2, sort_keys=True), encoding="utf-8")
+        print(
+            f"candidates={len(result.candidates)} attempts={result.attempts} "
+            f"archive={archive_path} artifact={path}"
+        )
         return EXIT_OK if result.candidates else EXIT_FAILED
     finally:
         await factory.aclose()

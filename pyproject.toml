@@ -55,7 +55,7 @@ where = ["."]
 include = ["cot_redteam*"]
 
 [tool.setuptools.package-data]
-cot_redteam = ["py.typed", "eval/datasets/*.jsonl"]
+cot_redteam = ["py.typed", "eval/datasets/*.jsonl", "data/*"]
 
 [tool.ruff]
 line-length = 100

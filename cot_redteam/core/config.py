@@ -59,7 +59,7 @@ class EvaluationSettings(StrictModel):
     models: list[str] = Field(default_factory=list)
     attacks: list[str] = Field(default_factory=list)
     monitors: list[str] = Field(default_factory=list)
-    dataset_path: str = "cot_redteam/eval/datasets/sample.jsonl"
+    dataset_path: str = "pkg:sample.jsonl"
     sample_count: int | None = Field(default=None, ge=1)
     sample_ids: list[str] | None = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
@@ -70,6 +70,7 @@ class EvaluationSettings(StrictModel):
     budgets: BudgetSettings = Field(default_factory=BudgetSettings)
     monitor_config: dict[str, dict[str, Any]] = Field(default_factory=dict)
     attack_config: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # Single retention policy for SQLite + artifacts (sensitive traces).
     retain_prompts: bool = True
     retain_responses: bool = True
     retain_reasoning: bool = True
@@ -85,9 +86,6 @@ class EvaluationSettings(StrictModel):
 
 class ArtifactSettings(StrictModel):
     root: str = "./artifacts"
-    save_prompts: bool = True
-    save_responses: bool = True
-    save_reasoning: bool = True
 
 
 class StorageSettings(StrictModel):
@@ -219,12 +217,36 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _resolve_runtime_paths(config: AppConfig, config_path: Path) -> AppConfig:
+    """Resolve relative filesystem paths against the config file directory."""
+    from cot_redteam.resources import is_package_dataset, resolve_path_against_config
+
+    dataset = config.evaluation.dataset_path
+    if not is_package_dataset(dataset):
+        dataset = str(resolve_path_against_config(dataset, config_path))
+    storage_path = str(resolve_path_against_config(config.storage.path, config_path))
+    artifacts_root = str(resolve_path_against_config(config.artifacts.root, config_path))
+    reporting_dir = str(resolve_path_against_config(config.reporting.output_dir, config_path))
+    archive = str(resolve_path_against_config(config.generative.archive_path, config_path))
+    output_dir = str(resolve_path_against_config(config.global_.output_dir, config_path))
+    return config.model_copy(
+        update={
+            "global_": config.global_.model_copy(update={"output_dir": output_dir}),
+            "evaluation": config.evaluation.model_copy(update={"dataset_path": dataset}),
+            "storage": config.storage.model_copy(update={"path": storage_path}),
+            "artifacts": config.artifacts.model_copy(update={"root": artifacts_root}),
+            "reporting": config.reporting.model_copy(update={"output_dir": reporting_dir}),
+            "generative": config.generative.model_copy(update={"archive_path": archive}),
+        }
+    )
+
+
 def load_config(
     path: str | Path,
     *,
     overrides: Mapping[str, Any] | None = None,
 ) -> AppConfig:
-    config_path = Path(path)
+    config_path = Path(path).resolve()
     if not config_path.exists():
         raise ConfigurationError(f"config file not found: {config_path}")
     data = _load_yaml(config_path)
@@ -234,7 +256,7 @@ def load_config(
                 raise ConfigurationError(f"unsupported override key: {key}")
             _set_nested(data, key, value)
     try:
-        return AppConfig.model_validate(data)
+        config = AppConfig.model_validate(data)
     except Exception as exc:
         message = str(exc)
         for secret_marker in ("api_key", "secret", "token", "password"):
@@ -242,6 +264,55 @@ def load_config(
                 message = "configuration validation failed"
                 break
         raise ConfigurationError(f"invalid configuration: {message}") from exc
+    return _resolve_runtime_paths(config, config_path)
+
+
+def validate_config(
+    config: AppConfig,
+    *,
+    environ: Mapping[str, str] | None = None,
+    require_credentials: bool = True,
+) -> None:
+    """Validate plugins, monitors, and dataset without contacting providers."""
+    from cot_redteam.attacks.base import AttackRegistry
+    from cot_redteam.core.errors import PluginError
+    from cot_redteam.eval.dataset import Dataset
+    from cot_redteam.monitors.base import MonitorRegistry
+    from cot_redteam.plugins.bootstrap import bootstrap_plugins
+    from cot_redteam.plugins.registry import PluginContext
+
+    if require_credentials:
+        for name, settings in config.providers.items():
+            if settings.kind in ("vllm", "llamacpp"):
+                continue
+            resolve_provider(config, name, environ=environ)
+
+    bootstrap_plugins()
+    context = PluginContext()
+    for attack_id in config.evaluation.attacks:
+        if attack_id not in AttackRegistry:
+            raise PluginError(
+                f"unknown attack {attack_id!r}. Available: {', '.join(AttackRegistry.ids())}"
+            )
+        AttackRegistry.create(
+            attack_id,
+            config.evaluation.attack_config.get(attack_id, {}),
+            context,
+        )
+
+    for monitor_id in config.evaluation.monitors:
+        if monitor_id not in MonitorRegistry:
+            raise PluginError(
+                f"unknown monitor {monitor_id!r}. Available: {', '.join(MonitorRegistry.ids())}"
+            )
+        MonitorRegistry.create(
+            monitor_id,
+            config.evaluation.monitor_config.get(monitor_id, {}),
+            context,
+        )
+
+    # Dataset accessibility (no provider network calls).
+    Dataset.load_jsonl(config.evaluation.dataset_path)
 
 
 def resolve_provider(

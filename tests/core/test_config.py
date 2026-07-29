@@ -60,3 +60,30 @@ def test_unsupported_override_rejected() -> None:
             FIXTURES / "config" / "minimal.yaml",
             overrides={"providers.openrouter.api_key_env": "X"},
         )
+
+
+def test_validate_config_loads_dataset(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cot_redteam.core.config import validate_config
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    config = load_config(FIXTURES / "config" / "minimal.yaml")
+    validate_config(config)
+
+
+def test_validate_config_fails_missing_dataset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cot_redteam.core.config import validate_config
+    from cot_redteam.core.errors import DatasetError
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    config = load_config(FIXTURES / "config" / "minimal.yaml")
+    config = config.model_copy(
+        update={
+            "evaluation": config.evaluation.model_copy(
+                update={"dataset_path": str(tmp_path / "missing.jsonl")}
+            )
+        }
+    )
+    with pytest.raises((ConfigurationError, DatasetError, Exception), match="dataset|not found"):
+        validate_config(config)

@@ -146,6 +146,9 @@ async def test_all_succeed_completed() -> None:
     )
     run = await engine.run(_plan())
     assert run.status is RunStatus.COMPLETED
+    # Engine does not own provider lifecycle unless close_providers=True.
+    assert factory.provider.closed is False
+    await factory.aclose()
     assert factory.provider.closed is True
 
 

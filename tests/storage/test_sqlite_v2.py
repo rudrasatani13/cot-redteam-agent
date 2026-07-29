@@ -59,8 +59,10 @@ def _run(run_id: str = "run-1") -> EvaluationRun:
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> SQLiteRunStore:
-    return SQLiteRunStore(tmp_path / "t.db")
+def store(tmp_path: Path):
+    s = SQLiteRunStore(tmp_path / "t.db")
+    yield s
+    s.close()
 
 
 def test_foreign_keys_are_enabled(store: SQLiteRunStore) -> None:

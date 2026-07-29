@@ -12,14 +12,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install (lock if present else editable)
+      - name: Install hash-locked dependencies
         run: |
           python -m pip install -U pip
-          if [ -f requirements-dev.lock ]; then
-            python -m pip install --require-hashes -r requirements-dev.lock || python -m pip install -e ".[dev]"
-          else
-            python -m pip install -e ".[dev]"
-          fi
+          python -m pip install --require-hashes -r requirements-dev.lock
+          python -m pip install --no-deps -e .
       - name: Ruff
         run: |
           python -m ruff format --check .
@@ -66,3 +63,17 @@ jobs:
           python -m build
           python -m pip install --force-reinstall --no-deps dist/cot_redteam_agent-0.2.0-py3-none-any.whl
           cot-redteam --help
+          SMOKE="$(mktemp -d)"
+          cd "$SMOKE"
+          cot-redteam init --path config.yaml
+          # validate without real remote keys for local providers only would fail;
+          # ensure packaged dataset marker resolves by loading config
+          python - <<'PY'
+          from cot_redteam.core.config import load_config
+          from cot_redteam.eval.dataset import Dataset
+          cfg = load_config("config.yaml")
+          assert cfg.evaluation.dataset_path.startswith("pkg:") or "sample" in cfg.evaluation.dataset_path
+          ds = Dataset.load_jsonl(cfg.evaluation.dataset_path)
+          assert len(ds.samples) > 0
+          print("wheel dataset ok", len(ds.samples))
+          PY

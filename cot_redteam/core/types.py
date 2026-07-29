@@ -8,12 +8,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from typing import Any as _Any
-
 JsonPrimitive = None | bool | int | float | str
-# Use Any for recursive JSON containers to keep mypy/pydantic happy.
-JsonValue = _Any
-JsonDataclass = _Any
+# Any keeps recursive JSON containers simple for mypy/pydantic.
+JsonValue = Any
+JsonDataclass = Any
 
 
 class ItemStatus(str, Enum):

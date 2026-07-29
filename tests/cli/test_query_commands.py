@@ -49,7 +49,7 @@ def test_list_show_report(tmp_path: Path) -> None:
             "models": ["vllm:m"],
             "attacks": ["injection.cot_injection"],
             "monitors": ["regex"],
-            "dataset_path": "cot_redteam/eval/datasets/sample.jsonl",
+            "dataset_path": "pkg:sample.jsonl",
         },
         "storage": {"path": str(db)},
         "reporting": {"output_dir": str(tmp_path / "reports")},

@@ -10,6 +10,7 @@ from pathlib import Path
 from cot_redteam.core.errors import DatasetError
 from cot_redteam.core.serialization import canonical_json, sha256_text
 from cot_redteam.core.types import DatasetSample
+from cot_redteam.resources import is_package_dataset, sample_dataset_file
 
 
 @dataclass(frozen=True)
@@ -23,9 +24,15 @@ class Dataset:
 
     @classmethod
     def load_jsonl(cls, path: str | Path) -> Dataset:
-        path = Path(path)
+        if isinstance(path, str) and is_package_dataset(path):
+            with sample_dataset_file() as pkg_path:
+                return cls._load_from_path(pkg_path, display_path=path)
+        return cls._load_from_path(Path(path), display_path=str(path))
+
+    @classmethod
+    def _load_from_path(cls, path: Path, *, display_path: str) -> Dataset:
         if not path.exists():
-            raise DatasetError(f"dataset not found: {path}")
+            raise DatasetError(f"dataset not found: {display_path}")
         samples: list[DatasetSample] = []
         digests: list[str] = []
         with path.open("r", encoding="utf-8") as handle:
@@ -65,9 +72,9 @@ class Dataset:
                     )
                 )
         if not samples:
-            raise DatasetError(f"dataset is empty: {path}")
+            raise DatasetError(f"dataset is empty: {display_path}")
         digest = sha256_text("\n".join(digests))
-        return cls(samples=tuple(samples), digest=digest, path=str(path))
+        return cls(samples=tuple(samples), digest=digest, path=display_path)
 
     def select(
         self,

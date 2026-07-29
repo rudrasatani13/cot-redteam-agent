@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from cot_redteam.attacks.base import BaseAttack
 from cot_redteam.core.config import AppConfig
@@ -20,6 +21,7 @@ from cot_redteam.core.types import (
     MonitorStatus,
     ReasoningSource,
     RunSummary,
+    TokenUsage,
 )
 from cot_redteam.eval.budgets import BudgetTracker
 from cot_redteam.eval.planner import PlannedItem, RunPlan
@@ -39,6 +41,7 @@ class EvaluationEngine:
         concurrency: int,
         config: AppConfig | None = None,
         plugin_context: PluginContext | None = None,
+        close_providers: bool = False,
     ) -> None:
         self.provider_factory = provider_factory
         self.attack_registry = attack_registry
@@ -46,6 +49,8 @@ class EvaluationEngine:
         self.budget = budget
         self.concurrency = max(1, concurrency)
         self.config = config
+        self.close_providers = close_providers
+        self._provider_semaphores: dict[str, asyncio.Semaphore] = {}
         self.plugin_context = plugin_context or PluginContext(
             provider_resolver=lambda name: provider_factory.create(
                 __import__("cot_redteam.core.types", fromlist=["ModelRef"]).ModelRef(
@@ -53,6 +58,27 @@ class EvaluationEngine:
                 )
             )
         )
+
+    def _provider_semaphore(self, provider_name: str) -> asyncio.Semaphore:
+        if provider_name not in self._provider_semaphores:
+            limit = self.concurrency
+            if self.config is not None and provider_name in self.config.providers:
+                limit = min(limit, max(1, self.config.providers[provider_name].concurrency))
+            self._provider_semaphores[provider_name] = asyncio.Semaphore(limit)
+        return self._provider_semaphores[provider_name]
+
+    def _estimate_cost(self, provider_name: str, usage: TokenUsage) -> Decimal | None:
+        if self.config is None or provider_name not in self.config.providers:
+            return None
+        settings = self.config.providers[provider_name]
+        if settings.input_price_per_million is None and settings.output_price_per_million is None:
+            return None
+        inp = Decimal(str(settings.input_price_per_million or 0))
+        out = Decimal(str(settings.output_price_per_million or 0))
+        cost = (Decimal(usage.input_tokens) * inp + Decimal(usage.output_tokens) * out) / Decimal(
+            1_000_000
+        )
+        return cost
 
     async def run(self, plan: RunPlan) -> EvaluationRun:
         started_at = datetime.now(timezone.utc)
@@ -72,7 +98,8 @@ class EvaluationEngine:
                         status=ItemStatus.CANCELLED,
                         error="cancelled",
                     )
-                return await self._execute_item(plan, item)
+                async with self._provider_semaphore(item.model.provider):
+                    return await self._execute_item(plan, item)
 
         tasks = [asyncio.create_task(run_one(item)) for item in plan.items]
         try:
@@ -91,6 +118,8 @@ class EvaluationEngine:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            if self.close_providers:
+                await self.provider_factory.aclose()
             # Collect cancelled results
             for item in plan.items:
                 if item.item_id not in results:
@@ -102,7 +131,6 @@ class EvaluationEngine:
                         status=ItemStatus.CANCELLED,
                         error="cancelled",
                     )
-            await self.provider_factory.aclose()
 
         ordered = tuple(results[item.item_id] for item in plan.items)
         summary = RunSummary.from_items(ordered)
@@ -185,7 +213,8 @@ class EvaluationEngine:
                 model_revision=raw_response.model_revision,
                 metadata=raw_response.metadata,
             )
-            await self.budget.record_response(response.usage, estimated_cost=None)
+            cost = self._estimate_cost(item.model.provider, response.usage)
+            await self.budget.record_response(response.usage, estimated_cost=cost)
         except BudgetExceededError as exc:
             return EvaluationItem(
                 item_id=item.item_id,
