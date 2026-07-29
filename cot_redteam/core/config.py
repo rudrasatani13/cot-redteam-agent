@@ -267,6 +267,22 @@ def load_config(
     return _resolve_runtime_paths(config, config_path)
 
 
+def _referenced_providers(config: AppConfig) -> set[str]:
+    """Return provider names referenced by evaluation and generative model refs."""
+    referenced: set[str] = set()
+    refs: list[str] = list(config.evaluation.models)
+    refs.extend(config.generative.target_models)
+    refs.append(config.generative.generator_model)
+    for model_ref in refs:
+        try:
+            referenced.add(ModelRef.parse(model_ref).provider)
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"invalid model reference {model_ref!r}: expected provider:model-id"
+            ) from exc
+    return referenced
+
+
 def validate_config(
     config: AppConfig,
     *,
@@ -282,25 +298,12 @@ def validate_config(
     from cot_redteam.plugins.registry import PluginContext
 
     if require_credentials:
-        # Only providers referenced by evaluation/generative models need credentials.
-        referenced: set[str] = set()
-        for model_ref in config.evaluation.models:
-            try:
-                referenced.add(ModelRef.parse(model_ref).provider)
-            except ValueError:
-                continue
-        for model_ref in config.generative.target_models:
-            try:
-                referenced.add(ModelRef.parse(model_ref).provider)
-            except ValueError:
-                continue
-        try:
-            referenced.add(ModelRef.parse(config.generative.generator_model).provider)
-        except ValueError:
-            pass
-        for name in sorted(referenced):
+        for name in sorted(_referenced_providers(config)):
             if name not in config.providers:
-                continue
+                raise ConfigurationError(
+                    f"referenced provider {name!r} is not configured. "
+                    f"Available: {', '.join(sorted(config.providers))}"
+                )
             settings = config.providers[name]
             if settings.kind in ("vllm", "llamacpp"):
                 continue

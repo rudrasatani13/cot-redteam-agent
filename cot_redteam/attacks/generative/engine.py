@@ -254,9 +254,9 @@ class GenerativeAttackEngine:
         attack_success: float,
         evasion: float,
     ) -> float:
-        # Exclude the candidate itself from the archive so novelty is not always 0.
-        prior = [t for t in self.archive_templates if t != candidate.spec.prompt_template]
-        novelty = lexical_novelty(candidate.spec.prompt_template, prior)
+        # Archive is updated only after scoring, so it already excludes this
+        # candidate. Use the full archive so true duplicates score novelty 0.
+        novelty = lexical_novelty(candidate.spec.prompt_template, self.archive_templates)
         components = {
             "attack_success": attack_success,
             "evasion": evasion,

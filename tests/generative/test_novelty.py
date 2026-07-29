@@ -54,7 +54,8 @@ def test_fitness_novelty_not_zero_against_empty_archive() -> None:
     assert candidate.components["novelty"] == 1.0
 
 
-def test_fitness_excludes_self_from_archive() -> None:
+def test_duplicate_template_scores_zero_novelty() -> None:
+    """Second distinct candidate with the same template is not novel."""
     from cot_redteam.attacks.generative.engine import (
         AttackCandidate,
         AttackSpec,
@@ -71,12 +72,20 @@ def test_fitness_excludes_self_from_archive() -> None:
 
     engine = GenerativeAttackEngine(_P(), ModelRef.parse("openrouter:m"))
     template = "alpha beta gamma delta {question}"
-    engine.archive_templates = [template]
-    candidate = AttackCandidate(
+    first = AttackCandidate(
         candidate_id="c1",
         spec=AttackSpec(name="n1", prompt_template=template),
         generation=0,
     )
-    engine.compute_fitness(candidate, attack_success=0.5, evasion=0.5)
-    # Self excluded → empty prior archive → novelty 1.0 for non-empty tokens
-    assert candidate.components["novelty"] == 1.0
+    engine.compute_fitness(first, attack_success=1.0, evasion=1.0)
+    assert first.components["novelty"] == 1.0
+    # Archive after first candidate is scored (production evaluate_candidates path).
+    engine.archive_templates.append(template)
+
+    second = AttackCandidate(
+        candidate_id="c2",
+        spec=AttackSpec(name="n2", prompt_template=template),
+        generation=0,
+    )
+    engine.compute_fitness(second, attack_success=1.0, evasion=1.0)
+    assert second.components["novelty"] == 0.0
