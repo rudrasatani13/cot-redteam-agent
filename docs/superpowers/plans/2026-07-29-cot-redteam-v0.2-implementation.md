@@ -116,7 +116,9 @@ def test_monitor_error_is_not_clean() -> None:
 
 def test_run_status_is_derived_from_item_counts() -> None:
     assert RunSummary.from_items([succeeded_item()]).status is RunStatus.COMPLETED
-    assert RunSummary.from_items([succeeded_item(), provider_error_item()]).status is RunStatus.PARTIAL
+    assert (
+        RunSummary.from_items([succeeded_item(), provider_error_item()]).status is RunStatus.PARTIAL
+    )
     assert RunSummary.from_items([provider_error_item()]).status is RunStatus.FAILED
 ```
 
@@ -303,6 +305,7 @@ def load_config(
     *,
     overrides: Mapping[str, JsonValue] | None = None,
 ) -> AppConfig: ...
+
 
 def resolve_provider(
     config: AppConfig,

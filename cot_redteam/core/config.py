@@ -282,7 +282,26 @@ def validate_config(
     from cot_redteam.plugins.registry import PluginContext
 
     if require_credentials:
-        for name, settings in config.providers.items():
+        # Only providers referenced by evaluation/generative models need credentials.
+        referenced: set[str] = set()
+        for model_ref in config.evaluation.models:
+            try:
+                referenced.add(ModelRef.parse(model_ref).provider)
+            except ValueError:
+                continue
+        for model_ref in config.generative.target_models:
+            try:
+                referenced.add(ModelRef.parse(model_ref).provider)
+            except ValueError:
+                continue
+        try:
+            referenced.add(ModelRef.parse(config.generative.generator_model).provider)
+        except ValueError:
+            pass
+        for name in sorted(referenced):
+            if name not in config.providers:
+                continue
+            settings = config.providers[name]
             if settings.kind in ("vllm", "llamacpp"):
                 continue
             resolve_provider(config, name, environ=environ)

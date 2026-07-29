@@ -52,14 +52,15 @@ def _load_entry_points(group: str) -> None:
 def bootstrap_plugins(*, force: bool = False) -> None:
     """Import built-ins and third-party entry points once."""
     global _BOOTSTRAPPED
-    if _BOOTSTRAPPED and not force:
-        return
-
     from cot_redteam.attacks.base import AttackRegistry
     from cot_redteam.monitors.base import MonitorRegistry
 
+    registries_empty = not AttackRegistry.ids() or not MonitorRegistry.ids()
+    if _BOOTSTRAPPED and not force and not registries_empty:
+        return
+
     # After registry.clear() in tests, modules stay cached; re-run registration.
-    need_reload = force or not AttackRegistry.ids() or not MonitorRegistry.ids()
+    need_reload = force or registries_empty
     for module_name in _BUILTIN_MODULES:
         module = importlib.import_module(module_name)
         if need_reload:

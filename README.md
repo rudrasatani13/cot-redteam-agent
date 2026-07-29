@@ -67,10 +67,12 @@ import asyncio
 from cot_redteam.core.config import load_config
 from cot_redteam.api import run_evaluation
 
+
 async def main():
     config = load_config("config.example.yaml")
     # run = await run_evaluation(config)  # requires credentials + network
     assert config.version == 2
+
 
 asyncio.run(main())
 ```

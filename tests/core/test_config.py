@@ -70,6 +70,19 @@ def test_validate_config_loads_dataset(monkeypatch: pytest.MonkeyPatch) -> None:
     validate_config(config)
 
 
+def test_validate_only_referenced_remote_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unused remote providers (e.g. OpenAI/Anthropic) do not require keys."""
+    from cot_redteam.core.config import validate_config
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "only-openrouter")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # Root example configures all three remotes; evaluation only uses openrouter.
+    config = load_config(Path("config.example.yaml"))
+    # Should not raise for missing OpenAI/Anthropic keys.
+    validate_config(config)
+
+
 def test_validate_config_fails_missing_dataset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

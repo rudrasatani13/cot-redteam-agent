@@ -10,6 +10,7 @@ from cot_redteam.attacks.base import BaseAttack, register_attack
 from cot_redteam.core.types import AttackAssessment, AttackPrompt, DatasetSample, ModelResponse
 from cot_redteam.plugins.registry import PluginMetadata
 
+
 @register_attack
 class DemoAttack(BaseAttack):
     metadata = PluginMetadata(
@@ -37,6 +38,7 @@ class DemoAttack(BaseAttack):
 from cot_redteam.monitors.base import BaseMonitor, register_monitor
 from cot_redteam.core.types import AttackPrompt, ModelResponse, MonitorOutcome, MonitorStatus
 from cot_redteam.plugins.registry import PluginMetadata
+
 
 @register_monitor
 class DemoMonitor(BaseMonitor):

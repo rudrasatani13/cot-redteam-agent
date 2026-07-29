@@ -237,7 +237,8 @@ class GenerativeAttackEngine:
                         generation=0,
                     )
                 )
-                self.archive_templates.append(spec.prompt_template)
+                # Do not archive templates until after novelty/fitness scoring;
+                # otherwise each candidate scores novelty 0 against itself.
             except Exception as exc:
                 diagnostics.append(f"attempt {attempts}: {exc}")
         return GenerationResult(
@@ -253,7 +254,9 @@ class GenerativeAttackEngine:
         attack_success: float,
         evasion: float,
     ) -> float:
-        novelty = lexical_novelty(candidate.spec.prompt_template, self.archive_templates)
+        # Exclude the candidate itself from the archive so novelty is not always 0.
+        prior = [t for t in self.archive_templates if t != candidate.spec.prompt_template]
+        novelty = lexical_novelty(candidate.spec.prompt_template, prior)
         components = {
             "attack_success": attack_success,
             "evasion": evasion,

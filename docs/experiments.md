@@ -25,5 +25,6 @@ ratio (when defined), and Fisher p-value together.
 
 ## Data retention
 
-`evaluation.retain_*` and `artifacts.save_*` control whether prompts, responses,
-and visible reasoning are kept. Treat retained traces as sensitive.
+`evaluation.retain_prompts`, `evaluation.retain_responses`, and
+`evaluation.retain_reasoning` control whether sensitive traces are kept in
+SQLite (and related artifacts). Treat retained traces as sensitive.

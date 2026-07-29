@@ -97,21 +97,21 @@ async def run_evaluation(
             ),
             media_type="application/json",
         )
+        # Manifest must not include a self-checksum of its own bytes (would be stale
+        # after any rewrite). Record other artifacts only; store a detached checksum.
         artifact_records: list[ArtifactRecord] = [run_artifact.record]
         manifest = build_manifest(run, config, plugins=plugins, artifacts=artifact_records)
+        manifest_body = json.dumps(manifest, indent=2, sort_keys=True)
         manifest_write = artifacts.write_text(
             f"{run.run_id}/manifest.json",
-            json.dumps(manifest, indent=2, sort_keys=True),
+            manifest_body,
             media_type="application/json",
         )
-        # Rebuild with the manifest artifact itself included.
-        artifact_records.append(manifest_write.record)
-        manifest = build_manifest(run, config, plugins=plugins, artifacts=artifact_records)
-        # Overwrite manifest with final content (includes its own hash record).
+        # Detached checksum file (not embedded in the manifest body).
         artifacts.write_text(
-            f"{run.run_id}/manifest.json",
-            json.dumps(manifest, indent=2, sort_keys=True),
-            media_type="application/json",
+            f"{run.run_id}/manifest.json.sha256",
+            f"{manifest_write.record.sha256}  manifest.json\n",
+            media_type="text/plain",
         )
         store.save(run, manifest)
     finally:

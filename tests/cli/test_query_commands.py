@@ -20,7 +20,6 @@ from cot_redteam.storage.sqlite import SQLiteRunStore
 
 def test_list_show_report(tmp_path: Path) -> None:
     db = tmp_path / "db.sqlite"
-    store = SQLiteRunStore(db)
     items = [
         EvaluationItem(
             item_id="i",
@@ -40,7 +39,8 @@ def test_list_show_report(tmp_path: Path) -> None:
         started_at=datetime.now(timezone.utc),
         completed_at=datetime.now(timezone.utc),
     )
-    store.save(run, {"x": 1})
+    with SQLiteRunStore(db) as store:
+        store.save(run, {"x": 1})
 
     cfg = {
         "version": 2,
