@@ -26,8 +26,24 @@ class GlobalSettings(StrictModel):
     concurrency: int = Field(default=4, ge=1)
 
 
+class TargetCapabilitySettings(StrictModel):
+    system_role: bool = True
+    developer_role: bool = False
+    multi_turn: bool = True
+    tool_role: bool = False
+    visible_reasoning: bool = False
+    native_seed: bool = False
+
+
 class ProviderSettings(StrictModel):
-    kind: Literal["openrouter", "openai", "anthropic", "vllm", "llamacpp"]
+    kind: Literal[
+        "openrouter",
+        "openai",
+        "anthropic",
+        "vllm",
+        "llamacpp",
+        "openai_compatible",
+    ]
     base_url: str | None = None
     api_key_env: str | None = None
     timeout: float = Field(default=120.0, gt=0)
@@ -37,10 +53,15 @@ class ProviderSettings(StrictModel):
     headers: dict[str, str] = Field(default_factory=dict)
     input_price_per_million: float | None = Field(default=None, ge=0)
     output_price_per_million: float | None = Field(default=None, ge=0)
+    capabilities: TargetCapabilitySettings = Field(default_factory=TargetCapabilitySettings)
 
     @model_validator(mode="after")
     def _remote_requires_api_key_env(self) -> ProviderSettings:
         if self.kind in ("vllm", "llamacpp"):
+            return self
+        if self.kind == "openai_compatible":
+            if not self.base_url:
+                raise ValueError("openai_compatible providers require base_url")
             return self
         if not self.api_key_env:
             raise ValueError(f"remote provider kind {self.kind!r} requires api_key_env")
@@ -171,7 +192,14 @@ class AppConfig(StrictModel):
 
 class ResolvedProviderSettings(StrictModel):
     name: str
-    kind: Literal["openrouter", "openai", "anthropic", "vllm", "llamacpp"]
+    kind: Literal[
+        "openrouter",
+        "openai",
+        "anthropic",
+        "vllm",
+        "llamacpp",
+        "openai_compatible",
+    ]
     base_url: str
     api_key: SecretStr | None = None
     api_key_env: str | None = None
@@ -182,6 +210,7 @@ class ResolvedProviderSettings(StrictModel):
     headers: dict[str, str] = Field(default_factory=dict)
     input_price_per_million: float | None = None
     output_price_per_million: float | None = None
+    capabilities: TargetCapabilitySettings = Field(default_factory=TargetCapabilitySettings)
 
     def __repr__(self) -> str:
         return (
@@ -397,7 +426,7 @@ def resolve_provider(
     if settings.api_key_env:
         value = env.get(settings.api_key_env)
         if not value:
-            if settings.kind in ("vllm", "llamacpp"):
+            if settings.kind in ("vllm", "llamacpp", "openai_compatible"):
                 api_key = None
             else:
                 raise ConfigurationError(
@@ -405,10 +434,12 @@ def resolve_provider(
                 )
         else:
             api_key = SecretStr(value)
-    elif settings.kind not in ("vllm", "llamacpp"):
+    elif settings.kind not in ("vllm", "llamacpp", "openai_compatible"):
         raise ConfigurationError(f"remote provider {provider_name!r} requires api_key_env")
 
-    base_url = settings.base_url or DEFAULT_BASE_URLS[settings.kind]
+    base_url = settings.base_url or DEFAULT_BASE_URLS.get(settings.kind)
+    if base_url is None:
+        raise ConfigurationError(f"provider {provider_name!r} requires base_url")
     return ResolvedProviderSettings(
         name=provider_name,
         kind=settings.kind,
@@ -422,6 +453,7 @@ def resolve_provider(
         headers=dict(settings.headers),
         input_price_per_million=settings.input_price_per_million,
         output_price_per_million=settings.output_price_per_million,
+        capabilities=settings.capabilities,
     )
 
 

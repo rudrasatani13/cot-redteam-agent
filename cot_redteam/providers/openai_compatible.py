@@ -15,9 +15,16 @@ from cot_redteam.core.types import (
     ModelRef,
     ModelResponse,
     ReasoningSource,
+    TargetCapabilities,
     TokenUsage,
 )
-from cot_redteam.providers.base import RetryPolicy, SleepFn, classify_http_status, default_sleep
+from cot_redteam.providers.base import (
+    RetryPolicy,
+    SleepFn,
+    classify_http_status,
+    default_sleep,
+    validate_message_capabilities,
+)
 
 
 class OpenAICompatibleProvider:
@@ -30,6 +37,7 @@ class OpenAICompatibleProvider:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.settings = settings
+        self.capabilities = TargetCapabilities(**settings.capabilities.model_dump())
         self.request_count = 0
         self._sleep = sleep or default_sleep
         self._retry = RetryPolicy(max_retries=settings.max_retries)
@@ -49,15 +57,30 @@ class OpenAICompatibleProvider:
         model: ModelRef,
         request: GenerationRequest,
     ) -> ModelResponse:
+        messages: list[dict[str, str]] = []
+        if request.messages:
+            validate_message_capabilities(request.messages, self.capabilities)
+            for message in request.messages:
+                serialized = {
+                    "role": message.role.value,
+                    "content": message.content,
+                }
+                if message.name is not None:
+                    serialized["name"] = message.name
+                messages.append(serialized)
+        else:
+            if request.prompt is None:
+                raise PermanentProviderError("legacy prompt is missing")
+            if request.system_prompt:
+                messages.append({"role": "system", "content": request.system_prompt})
+            messages.append({"role": "user", "content": request.prompt})
+
         payload: dict[str, Any] = {
             "model": model.model_id,
-            "messages": [],
+            "messages": messages,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
         }
-        if request.system_prompt:
-            payload["messages"].append({"role": "system", "content": request.system_prompt})
-        payload["messages"].append({"role": "user", "content": request.prompt})
         if request.stop:
             payload["stop"] = list(request.stop)
 

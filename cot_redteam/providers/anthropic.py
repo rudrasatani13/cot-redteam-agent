@@ -12,12 +12,20 @@ from cot_redteam.core.config import ResolvedProviderSettings
 from cot_redteam.core.errors import PermanentProviderError, TransientProviderError
 from cot_redteam.core.types import (
     GenerationRequest,
+    MessageRole,
     ModelRef,
     ModelResponse,
     ReasoningSource,
+    TargetCapabilities,
     TokenUsage,
 )
-from cot_redteam.providers.base import RetryPolicy, SleepFn, classify_http_status, default_sleep
+from cot_redteam.providers.base import (
+    RetryPolicy,
+    SleepFn,
+    classify_http_status,
+    default_sleep,
+    validate_message_capabilities,
+)
 
 
 class AnthropicProvider:
@@ -30,6 +38,7 @@ class AnthropicProvider:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.settings = settings
+        self.capabilities = TargetCapabilities(**settings.capabilities.model_dump())
         self.request_count = 0
         self._sleep = sleep or default_sleep
         self._retry = RetryPolicy(max_retries=settings.max_retries)
@@ -53,14 +62,49 @@ class AnthropicProvider:
         model: ModelRef,
         request: GenerationRequest,
     ) -> ModelResponse:
+        system_parts: list[str] = []
+        messages: list[dict[str, str]] = []
+        if request.messages:
+            validate_message_capabilities(request.messages, self.capabilities)
+            conversation_started = False
+            for message in request.messages:
+                if message.name is not None:
+                    raise PermanentProviderError(
+                        "anthropic text conversations do not support message names"
+                    )
+                if message.role is MessageRole.SYSTEM:
+                    if conversation_started:
+                        raise PermanentProviderError(
+                            "anthropic system messages must precede conversation messages"
+                        )
+                    system_parts.append(message.content)
+                elif message.role in (MessageRole.USER, MessageRole.ASSISTANT):
+                    conversation_started = True
+                    messages.append(
+                        {
+                            "role": message.role.value,
+                            "content": message.content,
+                        }
+                    )
+                else:
+                    raise PermanentProviderError(
+                        f"anthropic text conversations do not support {message.role.value} role"
+                    )
+        else:
+            if request.prompt is None:
+                raise PermanentProviderError("legacy prompt is missing")
+            messages.append({"role": "user", "content": request.prompt})
+            if request.system_prompt:
+                system_parts.append(request.system_prompt)
+
         payload: dict[str, Any] = {
             "model": model.model_id,
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
-            "messages": [{"role": "user", "content": request.prompt}],
+            "messages": messages,
         }
-        if request.system_prompt:
-            payload["system"] = request.system_prompt
+        if system_parts:
+            payload["system"] = "\n\n".join(system_parts)
         if request.stop:
             payload["stop_sequences"] = list(request.stop)
 
