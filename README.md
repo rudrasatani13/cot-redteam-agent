@@ -119,11 +119,16 @@ cot-redteam list-runs --config config.yaml
 
 ### Interactive adaptive TUI
 
+`--config` is required (bare `cot-redteam tui` will error):
+
 ```bash
 cot-redteam tui --config config.yaml
 # or auto-start:
 cot-redteam tui --config config.yaml --auto-start
 ```
+
+The bottom type bar is a **single slim line** (no tall box borders). Type a
+slash command and press Enter. Mid panels expand; the composer stays pinned.
 
 Inside the TUI:
 
@@ -133,8 +138,8 @@ Inside the TUI:
 /run
 ```
 
-Useful commands: `/help`, `/add`, `/models`, `/stop`, `/quit`. See the full
-[TUI guide](docs/tui.md).
+Useful commands: `/help`, `/add`, `/models`, `/attack`, `/stop`, `/quit`. See
+the full [TUI guide](docs/tui.md) (layout + slim composer notes).
 
 Render a report using the `run_id` printed by the run command:
 

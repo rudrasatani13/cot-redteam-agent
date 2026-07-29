@@ -12,12 +12,19 @@
 ### Changed
 
 - Polished interactive TUI: darker theme, status badges, attempt progress bar,
-  side-by-side timeline/output, clearer leak panel, command row styling
+  side-by-side timeline/output, clearer leak panel
+- **Slim command composer**: two-row bottom chrome (1-line input + keys),
+  Codex-style fill with **no** tall/solid side borders (removes the 3-line
+  left-edge glyphs); mid panels flex so the type bar stays pinned and visible
+- `docs/tui.md`: layout map, slim-composer notes, `--config` requirement,
+  agentic attack example, and updated slash-command table
 
 ### Fixed
 
 - Canary mentioned only while refusing in final text is no longer attack success;
   require compliant disclosure (own line, structured field, or non-refusal dump)
+- TUI command input no longer uses `border: tall` / squeezed solid frames that
+  hid the cursor or painted multi-line left borders
 
 ## 0.4.0 — 2026-07-30
 
