@@ -5,19 +5,20 @@ import re
 from cot_redteam.tui.commands import CommandKind, parse_command
 
 
-def test_tui_command_input_css_is_visible_height() -> None:
-    """Regression: height-1 / borderless Input disappears in the terminal."""
+def test_tui_command_input_css_is_slim_not_tall() -> None:
+    """Slim composer: no tall 3-line side borders; row frame keeps it visible."""
     from cot_redteam.tui.interactive import TEXTUAL_AVAILABLE, RedTeamTuiApp
 
     if not TEXTUAL_AVAILABLE:
         return
     css = RedTeamTuiApp.CSS
-    block = re.search(r"#command \{([^}]+)\}", css, re.S)
-    assert block is not None
-    body = block.group(1)
-    assert "height: 1" not in body
-    assert "height: 3" in body
-    assert "border: blank" not in body
+    cmd = re.search(r"#command \{([^}]+)\}", css, re.S)
+    row = re.search(r"#command-row \{([^}]+)\}", css, re.S)
+    assert cmd is not None and row is not None
+    assert "border: tall" not in cmd.group(1)
+    assert "border: tall" not in row.group(1)
+    # Outer row keeps a solid frame so the field stays visible.
+    assert "border: solid" in row.group(1)
 
 
 def test_parse_help_and_aliases() -> None:

@@ -115,42 +115,44 @@ if TEXTUAL_AVAILABLE:
             max-height: 4;
         }
         /*
-         * Command composer (IMPORTANT — do not set Input height to 1):
-         * Textual Input needs height 3 for a usable text row (border + cursor).
-         * Colors stay muted/chat-like; box stays fully visible.
+         * Slim chat-style composer:
+         * - no border: tall (that draws 3 stacked lines on the left)
+         * - height 1 input with solid fill so text/cursor stay visible
+         * - thin outer frame on #command-row only
          */
         #bottom {
-            height: 5;
-            min-height: 5;
-            max-height: 5;
+            height: 3;
+            min-height: 3;
+            max-height: 3;
             layout: vertical;
             background: #09090b;
             border-top: solid #3f3f46;
             padding: 0 1;
         }
         #command-row {
-            height: 3;
-            min-height: 3;
-            max-height: 3;
+            height: 1;
+            min-height: 1;
+            max-height: 1;
             layout: horizontal;
-            background: #09090b;
-            padding: 0;
+            background: #27272a;
+            border: solid #52525b;
+            padding: 0 1;
             align: left middle;
         }
         #command {
             width: 1fr;
-            height: 3;
-            min-height: 3;
-            max-height: 3;
-            background: #18181b;
+            height: 1;
+            min-height: 1;
+            max-height: 1;
+            background: #27272a;
             color: #fafafa;
-            border: tall #52525b;
-            padding: 0 2;
+            border: none;
+            padding: 0 1;
         }
         #command:focus {
-            background: #27272a;
+            background: #3f3f46;
             color: #ffffff;
-            border: tall #a1a1aa;
+            border: none;
         }
         #keys-bar {
             height: 1;
