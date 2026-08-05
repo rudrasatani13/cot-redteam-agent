@@ -90,6 +90,17 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--sample-count", type=int, default=None)
     run_p.add_argument("--seed", type=int, default=None)
 
+    scan = sub.add_parser(
+        "scan",
+        help="quick CI-ready compliance scan (exit 0 = clean, 1 = findings)",
+    )
+    scan.add_argument("--config", required=True)
+    scan.add_argument("--dataset", default=None)
+    scan.add_argument("--sample-count", type=int, default=None)
+    scan.add_argument("--model", action="append", default=None)
+    scan.add_argument("--attack", action="append", default=None)
+    scan.add_argument("--seed", type=int, default=None)
+
     list_runs = sub.add_parser("list-runs", help="list stored runs")
     list_runs.add_argument("--config", required=True)
     list_runs.add_argument("--limit", type=int, default=20)
@@ -271,6 +282,71 @@ def cmd_dataset_import(args: argparse.Namespace) -> int:
         f"imported={result.summary.imported} rejected={result.summary.rejected} "
         f"suite={output} manifest={manifest_path}"
     )
+    return EXIT_OK
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    return asyncio.run(_scan_async(args))
+
+
+async def _scan_async(args: argparse.Namespace) -> int:
+    """Quick opinionated compliance scan with CI-friendly exit codes.
+
+    Defaults (overridable via CLI flags or the config file): deterministic
+    adaptive canary attack, regex monitor, packaged sample dataset, tight
+    budgets. Exit codes: 0 = no findings, 1 = findings, 2 = config error,
+    3 = partial run.
+    """
+    overrides = {}
+    if args.dataset is not None:
+        overrides["evaluation.dataset_path"] = args.dataset
+    if args.sample_count is not None:
+        overrides["evaluation.sample_count"] = args.sample_count
+    if args.model:
+        overrides["evaluation.models"] = args.model
+    if args.attack:
+        overrides["evaluation.attacks"] = args.attack
+    if args.seed is not None:
+        overrides["global.seed"] = args.seed
+    config = load_config(args.config, overrides=overrides or None)
+    # Opinionated scan defaults: deterministic adaptive canary attack, regex
+    # monitor, tight budgets. Applied via documented overrides because the
+    # config model is frozen after validation.
+    scan_defaults: dict[str, object] = {}
+    if not config.evaluation.attacks:
+        scan_defaults["evaluation.attacks"] = ["injection.system_canary_adaptive"]
+    if not config.evaluation.monitors:
+        scan_defaults["evaluation.monitors"] = ["regex"]
+    if (config.evaluation.budgets.max_requests or 3600) > 40:
+        scan_defaults["evaluation.budgets.max_requests"] = 40
+    if (config.evaluation.budgets.max_elapsed_seconds or 3600) > 300:
+        scan_defaults["evaluation.budgets.max_elapsed_seconds"] = 300
+    if scan_defaults:
+        config = load_config(args.config, overrides={**overrides, **scan_defaults})
+    validate_config(config, require_credentials=True)
+
+    run = await run_evaluation(config)
+    findings: dict[str, int] = {}
+    attempts: dict[str, int] = {}
+    for item in run.items:
+        key = str(item.model)
+        attempts[key] = attempts.get(key, 0) + 1
+        if item.assessment is not None and item.assessment.success:
+            findings[key] = findings.get(key, 0) + 1
+
+    width = max([len(k) for k in attempts] + [len("Model")])
+    print(f"{'Model':<{width}}  Attempts  Findings")
+    print("-" * (width + 22))
+    for model in sorted(attempts):
+        print(f"{model:<{width}}  {attempts[model]:>8}  {findings.get(model, 0):>8}")
+    total = sum(findings.values())
+    if run.status is RunStatus.PARTIAL:
+        print(f"VERDICT: partial run (exit {EXIT_PARTIAL})")
+        return EXIT_PARTIAL
+    if total:
+        print(f"VERDICT: {total} finding(s) — compliance issue detected (exit {EXIT_FAILED})")
+        return EXIT_FAILED
+    print("VERDICT: no findings — model held (exit 0)")
     return EXIT_OK
 
 
@@ -533,6 +609,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "list-providers": cmd_list_providers,
         "list-suites": cmd_list_suites,
         "run": cmd_run,
+        "scan": cmd_scan,
         "tui": cmd_tui,
         "list-runs": cmd_list_runs,
         "show-run": cmd_show_run,
