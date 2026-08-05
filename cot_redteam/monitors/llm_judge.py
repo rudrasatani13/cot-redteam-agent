@@ -59,10 +59,14 @@ class LLMJudgeMonitor(BaseMonitor):
         context: PluginContext | None = None,
     ) -> None:
         super().__init__(config, context=context)
-        self.judge_model = str(
-            self.config.get("judge_model", "openrouter:anthropic/claude-3.5-sonnet")
-        )
+        # None means "not configured": the engine injects
+        # evaluation.judge_model as a fallback; otherwise the monitor reports
+        # a clear error instead of defaulting to an unconfigured provider.
+        self.judge_model = self.config.get("judge_model")
         self.temperature = float(self.config.get("temperature", 0.0))
+        # Verbose judges (e.g. MiniMax, Kimi) routinely exceed 512 tokens when
+        # writing the reason field; truncation produces invalid JSON.
+        self.max_tokens = int(self.config.get("max_tokens", 1024))
         self.system_prompt = str(self.config.get("system_prompt", DEFAULT_SYSTEM))
 
     async def evaluate(
@@ -70,6 +74,16 @@ class LLMJudgeMonitor(BaseMonitor):
         prompt: AttackPrompt,
         response: ModelResponse,
     ) -> MonitorOutcome:
+        if self.judge_model is None:
+            return MonitorOutcome(
+                monitor_id=self.metadata.id,
+                status=MonitorStatus.ERROR,
+                confidence=None,
+                explanation=(
+                    "llm_judge requires judge_model: set "
+                    "monitor_config.llm_judge.judge_model or evaluation.judge_model"
+                ),
+            )
         if self.context.provider_resolver is None:
             return MonitorOutcome(
                 monitor_id=self.metadata.id,
@@ -77,6 +91,7 @@ class LLMJudgeMonitor(BaseMonitor):
                 confidence=None,
                 explanation="provider_resolver not configured for llm_judge",
             )
+        judge_response = None
         try:
             model_ref = ModelRef.parse(self.judge_model)
             provider = self.context.provider_resolver(model_ref.provider)
@@ -89,10 +104,16 @@ class LLMJudgeMonitor(BaseMonitor):
                 ),
                 system_prompt=self.system_prompt,
                 temperature=self.temperature,
-                max_tokens=512,
+                max_tokens=self.max_tokens,
             )
+            # Real LLM judges are flaky: retry once when the response does not
+            # parse as the expected JSON object.
             judge_response = await provider.generate(model_ref, request)  # type: ignore[attr-defined]
-            payload = _parse_judge_payload(judge_response.text)
+            try:
+                payload = _parse_judge_payload(judge_response.text)
+            except ValueError:
+                judge_response = await provider.generate(model_ref, request)  # type: ignore[attr-defined]
+                payload = _parse_judge_payload(judge_response.text)
             suspicious = bool(payload.get("suspicious", False))
             confidence_raw = payload.get("confidence", 0.5)
             confidence = float(confidence_raw) if confidence_raw is not None else 0.5
@@ -106,14 +127,20 @@ class LLMJudgeMonitor(BaseMonitor):
                 details={
                     "judge_model": self.judge_model,
                     "raw_keys": list(payload.keys()),
+                    # Audit trail: keep what the judge actually said (truncated).
+                    "judge_response": (judge_response.text or "")[:500],
                 },
             )
         except (ProviderError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            details: dict[str, JsonValue] = {}
+            if judge_response is not None and judge_response.text:
+                details = {"judge_response": judge_response.text[:500]}
             return MonitorOutcome(
                 monitor_id=self.metadata.id,
                 status=MonitorStatus.ERROR,
                 confidence=None,
                 explanation=f"judge parse/provider failure: {exc}",
+                details=details,
             )
         except Exception as exc:  # pragma: no cover - defensive
             return MonitorOutcome(

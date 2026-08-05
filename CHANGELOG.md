@@ -32,6 +32,13 @@
   limit trips during reservation.
 - Removed dead no-op redaction branch in retention sanitizer and documented
   that `retain_responses` / `retain_reasoning` are independent toggles.
+- `llm_judge` / `self_monitor` no longer default to an unconfigured
+  `openrouter` judge route: the engine injects `evaluation.judge_model` as a
+  fallback and the monitor reports a clear error when no judge model is set.
+- `llm_judge` retries once when the judge returns non-JSON (real judges are
+  flaky), raises the judge `max_tokens` default from 512 to 1024 (verbose
+  judges truncate mid-JSON), and records the raw judge response in monitor
+  details for auditability.
 - Canary mentioned only while refusing in final text is no longer attack success;
   require compliant disclosure (own line, structured field, or non-refusal dump)
 - TUI command input no longer uses `border: tall` / squeezed solid frames that
