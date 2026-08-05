@@ -21,6 +21,7 @@ _BUILTIN_MODULES = (
     "cot_redteam.attacks.sandbagging.attacks",
     "cot_redteam.attacks.evasion.attacks",
     "cot_redteam.attacks.distillation.attacks",
+    "cot_redteam.attacks.harm.rubric",
     "cot_redteam.attacks.generative.engine",
     "cot_redteam.monitors.regex_monitor",
     "cot_redteam.monitors.llm_judge",

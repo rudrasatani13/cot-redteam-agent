@@ -250,6 +250,20 @@ class EvaluationEngine:
             outcomes.append(await monitor.evaluate(prompt, response))
         return outcomes
 
+    async def _assess_attack(
+        self,
+        attack: BaseAttack,
+        sample: DatasetSample,
+        prompt: AttackPrompt,
+        response: ModelResponse,
+    ) -> AttackAssessment:
+        """Prefer an async provider-backed assess (rubric judges) while
+        keeping the sync contract working."""
+        async_fn = getattr(attack, "assess_async", None)
+        if async_fn is not None:
+            return await async_fn(sample, prompt, response)  # type: ignore[no-any-return]
+        return attack.assess(sample, prompt, response)
+
     async def _next_agentic_prompt(
         self,
         attack: BaseAttack,
@@ -480,7 +494,7 @@ class EvaluationEngine:
 
             last_response = response
             try:
-                assessment = attack.assess(item.sample, prompt, response)
+                assessment = await self._assess_attack(attack, item.sample, prompt, response)
             except Exception as exc:
                 result = EvaluationItem(
                     item_id=item.item_id,
