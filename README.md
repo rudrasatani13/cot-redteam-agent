@@ -72,7 +72,13 @@ and CI without spending any budget.
 
 Python 3.10 through 3.13 is supported.
 
-Install the tagged source release:
+Install from PyPI:
+
+```bash
+python -m pip install cot-redteam-agent
+```
+
+Or install the tagged source release:
 
 ```bash
 # test: command
@@ -94,7 +100,7 @@ cd cot-redteam-agent
 python -m pip install -e ".[dev]"
 ```
 
-This release is not published to PyPI.
+Published on PyPI as `cot-redteam-agent`.
 
 ## Five-minute quickstart
 
