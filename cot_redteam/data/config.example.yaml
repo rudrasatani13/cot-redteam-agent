@@ -48,6 +48,12 @@ providers:
     max_retries: 2
     concurrency: 2
 
+  # Keyless deterministic provider for demos, tests, and CI (no API budget).
+  # mock_mode: auto (default) | refuse | disclose | error
+  # mock:
+  #   kind: mock
+  #   mock_mode: auto
+
 evaluation:
   models:
     - openrouter:replace-with-model-id

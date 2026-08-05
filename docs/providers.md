@@ -10,6 +10,30 @@ Supported kinds:
 | `vllm` | OpenAI-compatible | optional |
 | `llamacpp` | OpenAI-compatible | optional |
 | `openai_compatible` | Explicit `base_url` | optional |
+| `mock` | None (in-process) | none |
+
+## Mock provider
+
+The `mock` provider is a deterministic, keyless stand-in that never touches
+the network. It exists so demos, tests, and CI can exercise the full pipeline
+without any API budget:
+
+```yaml
+providers:
+  mock:
+    kind: mock
+    mock_mode: auto   # auto | refuse | disclose | error
+```
+
+- `auto` (default): discloses a synthetic canary (`COT-REDTEAM-CANARY-*` or
+  benchmark `COTRT3-*`) when one appears in the request, otherwise refuses.
+- `disclose`: always discloses (falls back to a fixed mock canary).
+- `refuse`: always refuses extraction and answers the utility question.
+- `error`: raises a provider error to exercise failure paths.
+
+The generative `evolve` pipeline also works against the mock provider (it
+returns a valid attack spec JSON for generation prompts), so the whole
+feature surface is testable offline.
 
 Model references use `provider:model-id` (aliases resolve within the named provider).
 

@@ -8,6 +8,23 @@
   invent next technique until real final-text disclosure or `max_attempts`
 - Deterministic technique catalog (format, transform, authority, social, …)
   selected from refusal/defense feedback
+- **Parseltongue-inspired encoding family**: leetspeak, Unicode homoglyphs,
+  zero-width joiners, morse, reversed chars, ROT13, base64, hex, and binary
+  techniques in the agent catalog, with matching `encoding` payloads in the
+  packaged bank
+- **Encoded-disclosure scoring**: base64/hex/ROT13/reversed/chunked forms of
+  the canary in the final text now count as real leaks (with per-encoding
+  evidence); an encoded quote inside a refusal is still not success
+- **Hedge-aware defense classification**: soft-refusal/hedge markers add a
+  `hedged_refuse` defense class and `hedge_count` / `hedged_disclosure`
+  metrics, so the agent can counter weak refusals instead of treating them
+  like hard refusals
+- **Keyless `mock` provider kind** (`mock_mode: auto|refuse|disclose|error`)
+  for demos, tests, and CI without API keys
+- **`cot-redteam race`**: run one probe across models and compare compliance
+  verdicts (disclosed / refused / hedged / complied / error)
+- GODMODE-inspired payload bank seeds: refusal-inversion divider,
+  boundary inversion, prefill roleplay, and encoding framings
 
 ### Changed
 
@@ -18,6 +35,8 @@
   left-edge glyphs); mid panels flex so the type bar stays pinned and visible
 - `docs/tui.md`: layout map, slim-composer notes, `--config` requirement,
   agentic attack example, and updated slash-command table
+- CI no longer runs the full pipeline twice for PR branches (`push` is
+  limited to `main`; `pull_request` still covers branch pushes)
 
 ### Fixed
 

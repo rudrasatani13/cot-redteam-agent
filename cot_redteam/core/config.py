@@ -43,6 +43,7 @@ class ProviderSettings(StrictModel):
         "vllm",
         "llamacpp",
         "openai_compatible",
+        "mock",
     ]
     base_url: str | None = None
     api_key_env: str | None = None
@@ -54,10 +55,11 @@ class ProviderSettings(StrictModel):
     input_price_per_million: float | None = Field(default=None, ge=0)
     output_price_per_million: float | None = Field(default=None, ge=0)
     capabilities: TargetCapabilitySettings = Field(default_factory=TargetCapabilitySettings)
+    mock_mode: Literal["auto", "refuse", "disclose", "error"] | None = None
 
     @model_validator(mode="after")
     def _remote_requires_api_key_env(self) -> ProviderSettings:
-        if self.kind in ("vllm", "llamacpp"):
+        if self.kind in ("vllm", "llamacpp", "mock"):
             return self
         if self.kind == "openai_compatible":
             if not self.base_url:
@@ -201,6 +203,7 @@ class ResolvedProviderSettings(StrictModel):
         "vllm",
         "llamacpp",
         "openai_compatible",
+        "mock",
     ]
     base_url: str
     api_key: SecretStr | None = None
@@ -213,6 +216,7 @@ class ResolvedProviderSettings(StrictModel):
     input_price_per_million: float | None = None
     output_price_per_million: float | None = None
     capabilities: TargetCapabilitySettings = Field(default_factory=TargetCapabilitySettings)
+    mock_mode: Literal["auto", "refuse", "disclose", "error"] | None = None
 
     def __repr__(self) -> str:
         return (
@@ -382,7 +386,7 @@ def validate_config(
                     f"Available: {', '.join(sorted(config.providers))}"
                 )
             settings = config.providers[name]
-            if settings.kind in ("vllm", "llamacpp"):
+            if settings.kind in ("vllm", "llamacpp", "mock"):
                 continue
             resolve_provider(config, name, environ=environ)
 
@@ -434,7 +438,7 @@ def resolve_provider(
     if settings.api_key_env:
         value = env.get(settings.api_key_env)
         if not value:
-            if settings.kind in ("vllm", "llamacpp", "openai_compatible"):
+            if settings.kind in ("vllm", "llamacpp", "openai_compatible", "mock"):
                 api_key = None
             else:
                 raise ConfigurationError(
@@ -442,10 +446,14 @@ def resolve_provider(
                 )
         else:
             api_key = SecretStr(value)
-    elif settings.kind not in ("vllm", "llamacpp", "openai_compatible"):
+    elif settings.kind not in ("vllm", "llamacpp", "openai_compatible", "mock"):
         raise ConfigurationError(f"remote provider {provider_name!r} requires api_key_env")
 
-    base_url = settings.base_url or DEFAULT_BASE_URLS.get(settings.kind)
+    base_url: str | None
+    if settings.kind == "mock":
+        base_url = "mock://local"
+    else:
+        base_url = settings.base_url or DEFAULT_BASE_URLS.get(settings.kind)
     if base_url is None:
         raise ConfigurationError(f"provider {provider_name!r} requires base_url")
     return ResolvedProviderSettings(
@@ -462,6 +470,7 @@ def resolve_provider(
         input_price_per_million=settings.input_price_per_million,
         output_price_per_million=settings.output_price_per_million,
         capabilities=settings.capabilities,
+        mock_mode=settings.mock_mode,
     )
 
 
