@@ -21,6 +21,17 @@
 
 ### Fixed
 
+- `config validate` no longer requires an `openrouter` provider (or any
+  unused provider) when the config omits the `generative` section: the
+  `generative.generator_model` default no longer silently references
+  `openrouter:anthropic/claude-3.5-sonnet`. `evolve` now errors clearly when
+  no generator model is configured.
+- CLI `--help` banner now shows the real package version instead of a
+  hardcoded stale `0.3` string.
+- Budget tracker no longer counts a phantom request when the elapsed-time
+  limit trips during reservation.
+- Removed dead no-op redaction branch in retention sanitizer and documented
+  that `retain_responses` / `retain_reasoning` are independent toggles.
 - Canary mentioned only while refusing in final text is no longer attack success;
   require compliant disclosure (own line, structured field, or non-refusal dump)
 - TUI command input no longer uses `border: tall` / squeezed solid frames that

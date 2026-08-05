@@ -36,9 +36,9 @@ def sanitize_run(run: EvaluationRun, config: AppConfig) -> EvaluationRun:
             if not retain_reasoning:
                 reasoning = None
                 source = ReasoningSource.ABSENT
-            if not retain_responses:
-                # Without response body, also drop reasoning content.
-                reasoning = None if not retain_reasoning else reasoning
+            # retain_responses and retain_reasoning are independent toggles:
+            # a user may keep reasoning while redacting response text or vice
+            # versa. Reasoning is only dropped when retain_reasoning is false.
             response = ModelResponse(
                 text=text,
                 model=response.model,

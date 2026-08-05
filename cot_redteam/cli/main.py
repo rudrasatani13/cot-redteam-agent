@@ -42,7 +42,7 @@ EXIT_PARTIAL = 3
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cot-redteam",
-        description="CoT Red Team Agent 0.3",
+        description=f"CoT Red Team Agent {__version__}",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--debug", action="store_true", help="show full tracebacks")
@@ -393,7 +393,10 @@ async def _evolve_async(args: argparse.Namespace) -> int:
 
     config = load_config(args.config)
     validate_config(config, require_credentials=True)
-    generator = ModelRef.parse(args.generator_model or config.generative.generator_model)
+    generator_ref = args.generator_model or config.generative.generator_model
+    if not generator_ref:
+        raise ConfigurationError("evolve requires --generator-model or generative.generator_model")
+    generator = ModelRef.parse(generator_ref)
     targets = (
         [args.target_model]
         if args.target_model

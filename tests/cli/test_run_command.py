@@ -100,3 +100,40 @@ def test_list_attacks() -> None:
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
     assert exc.value.code == 0
+
+
+def test_cli_description_tracks_package_version() -> None:
+    """Regression: the help banner hardcoded '0.3' after the 0.4.0 release."""
+    from cot_redteam import __version__
+    from cot_redteam.cli.main import _build_parser
+
+    parser = _build_parser()
+    assert parser.description == f"CoT Red Team Agent {__version__}"
+    assert "0.3" not in parser.description
+
+
+def test_evolve_without_generator_model_errors_cleanly(tmp_path: Path) -> None:
+    """evolve must fail with a clear message when no generator model is set.
+
+    Regression: the old generative.generator_model default silently required
+    openrouter at config-validate time; with the default removed, evolve must
+    tell the user what to configure instead of crashing.
+    """
+    dataset = tmp_path / "d.jsonl"
+    dataset.write_text('{"id":"1","question":"2+2?"}\n', encoding="utf-8")
+    cfg = {
+        "version": 2,
+        "global": {"seed": 1},
+        "providers": {"fake": {"kind": "vllm", "base_url": "http://localhost:9/v1"}},
+        "evaluation": {
+            "models": ["fake:local"],
+            "attacks": ["injection.cot_injection"],
+            "monitors": ["regex"],
+            "dataset_path": str(dataset),
+            "sample_count": 1,
+        },
+        "storage": {"path": str(tmp_path / "db.sqlite")},
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    assert main(["evolve", "--config", str(cfg_path)]) == 2
