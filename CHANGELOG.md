@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **LLM-driven adaptive attacker** (`injection.system_canary_agent_llm`):
+  PAIR/TAP-style attack where an attacker model writes extraction prompts
+  from the full conversation history and latest defense class. Generates
+  `branch_width` candidates per step (TAP-style branching), tries them
+  best-first, refreshes from updated history, and degrades to the
+  deterministic technique catalog if the attacker provider fails. The
+  canary never enters the attacker context. Live-verified: the attacker
+  invented a JSON-schema coercion prompt that made deepseek-v4-flash
+  disclose the canary (payload `llm-7`, attempt 7/8)
+- Engine agentic hook now supports async `next_prompt_after_failure_async`
+  for provider-backed attackers (sync contract unchanged)
+
 ## 0.5.0 — 2026-08-05
 
 ### Added

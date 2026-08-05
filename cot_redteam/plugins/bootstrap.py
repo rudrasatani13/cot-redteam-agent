@@ -13,6 +13,7 @@ _BOOTSTRAPPED = False
 _BUILTIN_MODULES = (
     "cot_redteam.attacks.injection.attacks",
     "cot_redteam.attacks.injection.agent",
+    "cot_redteam.attacks.injection.agent_llm",
     "cot_redteam.attacks.faithfulness.attacks",
     "cot_redteam.attacks.steganography.attacks",
     "cot_redteam.attacks.manipulation.attacks",

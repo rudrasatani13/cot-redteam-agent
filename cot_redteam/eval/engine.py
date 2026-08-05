@@ -14,6 +14,7 @@ from cot_redteam.core.reasoning import extract_visible_reasoning
 from cot_redteam.core.types import (
     AttackAssessment,
     AttackPrompt,
+    DatasetSample,
     EvaluationItem,
     EvaluationRun,
     GenerationRequest,
@@ -249,6 +250,26 @@ class EvaluationEngine:
             outcomes.append(await monitor.evaluate(prompt, response))
         return outcomes
 
+    async def _next_agentic_prompt(
+        self,
+        attack: BaseAttack,
+        sample: DatasetSample,
+        history: Sequence[Mapping[str, JsonValue]],
+        *,
+        max_attempts: int,
+    ) -> AttackPrompt | None:
+        """Resolve the next agentic prompt, preferring an async provider-backed
+        attacker (LLM-driven attacks) while keeping the sync contract working."""
+        async_fn = getattr(attack, "next_prompt_after_failure_async", None)
+        if async_fn is not None:
+            result = await async_fn(sample, history, max_attempts=max_attempts)
+            return result  # type: ignore[no-any-return]
+        return attack.next_prompt_after_failure(
+            sample,
+            history,
+            max_attempts=max_attempts,
+        )
+
     @staticmethod
     def _with_attempt_metadata(
         prompt: AttackPrompt,
@@ -357,7 +378,8 @@ class EvaluationEngine:
             if pending:
                 prompt = pending.pop(0)
             elif agentic:
-                nxt = attack.next_prompt_after_failure(
+                nxt = await self._next_agentic_prompt(
+                    attack,
                     item.sample,
                     attempt_history,
                     max_attempts=max_attempts,
