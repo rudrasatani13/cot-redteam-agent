@@ -1,10 +1,10 @@
-# Release checklist — 0.3.0
+# Release checklist — 0.5.0
 
 ## Repository state
 
 - [ ] Release commit is on the intended branch and the worktree is clean.
-- [ ] Version is `0.3.0` in package metadata and changelog.
-- [ ] No tag or GitHub Release named `v0.3.0` already exists.
+- [ ] Version is `0.5.0` in package metadata and changelog.
+- [ ] No tag or GitHub Release named `v0.5.0` already exists.
 - [ ] Diff contains no credentials, private datasets, provider responses,
       databases, reports, artifacts, caches, or build output.
 - [ ] `SECURITY.md`, `SUPPORT.md`, `CONTRIBUTING.md`, and community templates
@@ -42,11 +42,11 @@
 - [ ] Change repository visibility to public.
 - [ ] Enable GitHub private vulnerability reporting.
 - [ ] Verify README, issue-template, support, and security links publicly.
-- [ ] Create annotated tag `v0.3.0` from the merged `main` commit.
+- [ ] Create annotated tag `v0.5.0` from the merged `main` commit.
 - [ ] Build wheel and sdist from that exact commit.
-- [ ] Publish GitHub Release `v0.3.0` with changelog-derived notes.
-- [ ] Attach `cot_redteam_agent-0.3.0-py3-none-any.whl`.
-- [ ] Attach `cot_redteam_agent-0.3.0.tar.gz`.
+- [ ] Publish GitHub Release `v0.5.0` with changelog-derived notes.
+- [ ] Attach `cot_redteam_agent-0.5.0-py3-none-any.whl`.
+- [ ] Attach `cot_redteam_agent-0.5.0.tar.gz`.
 - [ ] Verify release-asset checksums and clean installation.
 - [ ] Confirm documentation does not claim PyPI publication.
 

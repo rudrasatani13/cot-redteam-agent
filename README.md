@@ -9,9 +9,11 @@ LLM reasoning under adversarial prompts. You provide model API credentials or a
 local inference endpoint; the tool plans reproducible experiments, runs attacks
 and monitors, records failure-aware outcomes, and generates auditable reports.
 
-Version `0.4.0` adds an adaptive multi-payload canary attack and a Codex-style
-interactive TUI while preserving the `0.3` benchmark and `0.2` Python API.
-Existing users should also read the
+Version `0.5.0` adds a Parseltongue-inspired encoding attack family with
+encoded-disclosure scoring, hedge-aware refusal classification, a keyless
+`mock` provider for demos and CI, a multi-model `race` command, and a fully
+tested interactive TUI while preserving the `0.4` adaptive attacks, `0.3`
+benchmark, and `0.2` Python API. Existing users should also read the
 [0.3 migration guide](docs/migration-0.2-to-0.3.md).
 
 ![Adaptive red-team TUI](docs/assets/tui-adaptive-redteam.png)
@@ -74,14 +76,14 @@ Install the tagged source release:
 
 ```bash
 # test: command
-python -m pip install "git+https://github.com/rudrasatani13/cot-redteam-agent.git@v0.4.0"
+python -m pip install "git+https://github.com/rudrasatani13/cot-redteam-agent.git@v0.5.0"
 ```
 
 Or install the wheel attached to the GitHub release:
 
 ```bash
 python -m pip install \
-  "https://github.com/rudrasatani13/cot-redteam-agent/releases/download/v0.4.0/cot_redteam_agent-0.4.0-py3-none-any.whl"
+  "https://github.com/rudrasatani13/cot-redteam-agent/releases/download/v0.5.0/cot_redteam_agent-0.5.0-py3-none-any.whl"
 ```
 
 For development:
