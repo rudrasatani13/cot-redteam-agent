@@ -78,10 +78,6 @@ class BudgetTracker:
                 self._exceeded = True
                 raise BudgetExceededError("max_requests exceeded")
             self._requests += 1
-            if self.settings.max_elapsed_seconds is not None:
-                if self._elapsed() >= self.settings.max_elapsed_seconds:
-                    self._exceeded = True
-                    raise BudgetExceededError("max_elapsed_seconds exceeded")
 
     async def record_response(
         self,

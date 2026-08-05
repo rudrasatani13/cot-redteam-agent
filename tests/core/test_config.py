@@ -161,6 +161,33 @@ def test_validate_local_referenced_provider_without_keys(
     validate_config(config)
 
 
+def test_validate_without_generative_section_needs_no_extra_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A config that never uses evolve must not require openrouter credentials.
+
+    Regression: GenerativeSettings.generator_model used to default to
+    openrouter:anthropic/claude-3.5-sonnet, so any config without an
+    explicit generative section failed validation unless openrouter was
+    configured — even when the user only runs local evaluation.
+    """
+    from cot_redteam.core.config import validate_config
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    config = load_config(FIXTURES / "config" / "minimal.yaml")
+    config = config.model_copy(
+        update={
+            "evaluation": config.evaluation.model_copy(
+                update={"models": ["vllm:local-model"], "judge_model": None}
+            ),
+            "generative": config.generative.model_copy(
+                update={"generator_model": None, "target_models": []}
+            ),
+        }
+    )
+    validate_config(config)
+
+
 def test_validate_missing_credential_for_referenced_remote(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

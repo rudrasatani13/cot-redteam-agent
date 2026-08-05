@@ -236,6 +236,15 @@ class EvaluationEngine:
             mon_cfg: Mapping = {}
             if self.config is not None:
                 mon_cfg = self.config.evaluation.monitor_config.get(monitor_id, {})
+            # llm_judge / self_monitor fall back to evaluation.judge_model
+            # when the monitor config does not name a judge route.
+            if (
+                monitor_id in ("llm_judge", "self_monitor")
+                and "judge_model" not in mon_cfg
+                and self.config is not None
+                and self.config.evaluation.judge_model
+            ):
+                mon_cfg = {**mon_cfg, "judge_model": self.config.evaluation.judge_model}
             monitor = self.monitor_registry.create(monitor_id, mon_cfg, self.plugin_context)
             outcomes.append(await monitor.evaluate(prompt, response))
         return outcomes

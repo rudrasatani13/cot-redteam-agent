@@ -106,6 +106,13 @@ def _register_fakes() -> None:
         _ErrorMonitor.metadata,
         lambda config, context: _ErrorMonitor(config, context=context),
     )
+    from cot_redteam.monitors.llm_judge import LLMJudgeMonitor
+
+    if "llm_judge" not in MonitorRegistry:
+        MonitorRegistry.register(
+            LLMJudgeMonitor.metadata,
+            lambda config, context: LLMJudgeMonitor(config, context=context),
+        )
     yield
     AttackRegistry.clear()
     MonitorRegistry.clear()
@@ -744,3 +751,56 @@ async def test_adaptive_loop_can_exhaust_bank_without_false_success() -> None:
     assert run.items[0].assessment.success is False
     assert provider.n == 4
     assert "exhausted" in run.items[0].assessment.explanation.lower()
+
+
+@pytest.mark.asyncio
+async def test_llm_judge_falls_back_to_evaluation_judge_model() -> None:
+    """Regression: llm_judge used to default judge_model to an unconfigured
+    openrouter route. The engine must inject evaluation.judge_model so the
+    monitor runs against the configured judge route."""
+    from cot_redteam.core.config import AppConfig
+    from cot_redteam.core.types import MonitorStatus
+
+    class JudgeSpyProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.called_models: list[str] = []
+
+        async def generate(self, model: ModelRef, request: GenerationRequest) -> ModelResponse:
+            self.called_models.append(str(model))
+            return ModelResponse(
+                text='{"suspicious": false, "confidence": 0.1, "reason": "clean"}',
+                model=model,
+                usage=TokenUsage(1, 1),
+                provider_request_id="j1",
+            )
+
+    config = AppConfig.model_validate(
+        {
+            "providers": {"fake": {"kind": "vllm", "base_url": "http://x/v1"}},
+            "evaluation": {
+                "models": ["fake:m"],
+                "attacks": ["test.ok_attack"],
+                "monitors": ["llm_judge"],
+                "dataset_path": "pkg:sample.jsonl",
+                "sample_count": 1,
+                "judge_model": "fake:judge",
+                "budgets": {"max_requests": 10},
+            },
+        }
+    )
+    spy = JudgeSpyProvider()
+    factory = FakeFactory(spy)
+    engine = EvaluationEngine(
+        factory,
+        AttackRegistry,
+        MonitorRegistry,
+        BudgetTracker(BudgetSettings()),
+        concurrency=2,
+        config=config,
+    )
+    run = await engine.run(_plan(monitor_ids=("llm_judge",)))
+    assert run.items[0].status is ItemStatus.SUCCEEDED
+    monitor_outcome = run.items[0].monitors[0]
+    assert monitor_outcome.status is MonitorStatus.CLEAN
+    assert "fake:judge" in spy.called_models

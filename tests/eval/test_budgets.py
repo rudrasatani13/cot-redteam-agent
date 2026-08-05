@@ -50,3 +50,20 @@ async def test_elapsed_budget() -> None:
     clock["t"] = 2.0
     with pytest.raises(BudgetExceededError, match="elapsed"):
         await tracker.reserve_request()
+
+
+@pytest.mark.asyncio
+async def test_elapsed_trip_at_reserve_does_not_phantom_count() -> None:
+    """Regression: a failed reserve must not leave a phantom request count."""
+    clock = {"t": 0.0}
+
+    def mono() -> float:
+        return clock["t"]
+
+    tracker = BudgetTracker(BudgetSettings(max_elapsed_seconds=1.0), clock=mono)
+    clock["t"] = 2.0
+    with pytest.raises(BudgetExceededError, match="elapsed"):
+        await tracker.reserve_request()
+    snap = tracker.snapshot()
+    assert snap.requests == 0
+    assert snap.exceeded is True

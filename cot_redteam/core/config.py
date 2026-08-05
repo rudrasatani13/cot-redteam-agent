@@ -140,7 +140,9 @@ class ReportingSettings(StrictModel):
 
 
 class GenerativeSettings(StrictModel):
-    generator_model: str = "openrouter:anthropic/claude-3.5-sonnet"
+    # None means "not configured": config validate must not require a provider
+    # for a feature the user is not using. The evolve command errors clearly.
+    generator_model: str | None = None
     target_models: list[str] = Field(default_factory=list)
     evolution_rounds: int = Field(default=3, ge=1)
     population_size: int = Field(default=5, ge=1)
@@ -346,7 +348,8 @@ def _referenced_providers(config: AppConfig) -> set[str]:
     if config.evaluation.judge_model:
         refs.append(config.evaluation.judge_model)
     refs.extend(config.generative.target_models)
-    refs.append(config.generative.generator_model)
+    if config.generative.generator_model:
+        refs.append(config.generative.generator_model)
     for model_ref in refs:
         try:
             referenced.add(ModelRef.parse(model_ref).provider)
