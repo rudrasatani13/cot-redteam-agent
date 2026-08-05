@@ -27,6 +27,10 @@ and last real successful disclosure (refusal re-quotes are not counted as succes
 - Agentic canary extraction: seeds a payload bank, classifies each refusal, then
   invents the next technique until a **compliant final-text** disclosure (or
   budget). Refusal quotes are not success.
+- **LLM-driven attacker** (`injection.system_canary_agent_llm`): an attacker
+  model writes the next extraction prompts from the conversation (PAIR loop,
+  TAP-style candidate branching) and falls back to the deterministic catalog
+  if the attacker provider fails. Requires `attacker_model` in `attack_config`.
 - Adaptive fixed-bank mode also available (`injection.system_canary_adaptive`).
 - Interactive Codex-style TUI with slash commands, multi-model board, and live
   attempt timeline (`cot-redteam tui`).

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from typing import ClassVar
@@ -20,9 +21,19 @@ class BaseAttack(ABC):
     """Engine-facing attack contract."""
 
     metadata: ClassVar[PluginMetadata]
+    #: True when the attack cannot operate without non-empty configuration
+    #: (e.g. an attacker model reference). The generic contract test skips
+    #: these; config validation still fails fast with a clear message.
+    requires_config: ClassVar[bool] = False
 
-    def __init__(self, config: Mapping[str, JsonValue] | None = None) -> None:
+    def __init__(
+        self,
+        config: Mapping[str, JsonValue] | None = None,
+        *,
+        context: PluginContext | None = None,
+    ) -> None:
         self.config: dict[str, JsonValue] = dict(config or {})
+        self.context = context or PluginContext()
 
     @abstractmethod
     def create_prompt(self, sample: DatasetSample) -> AttackPrompt:
@@ -90,6 +101,12 @@ def register_attack(attack_cls: type[BaseAttack]) -> type[BaseAttack]:
         config: Mapping[str, JsonValue],
         context: PluginContext,
     ) -> BaseAttack:
+        # Attacks may or may not accept a PluginContext; only pass it when
+        # the class declares the parameter (introspection beats try/except,
+        # which could mask TypeErrors raised inside __init__).
+        params = inspect.signature(attack_cls.__init__).parameters
+        if "context" in params:
+            return attack_cls(config, context=context)
         return attack_cls(config)
 
     # Idempotent under importlib.reload used by tests.

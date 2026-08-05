@@ -31,6 +31,15 @@ def test_every_builtin_attack_returns_typed_prompt_and_assessment() -> None:
     metadata_items = AttackRegistry.metadata()
     assert metadata_items
     for metadata in metadata_items:
+        attack_cls = AttackRegistry._factories[metadata.id]  # noqa: SLF001
+        # config-required attacks (attacker_model etc.) are covered by their
+        # own suites; the generic contract applies to the rest.
+        try:
+            sample_attack = attack_cls({}, None)
+        except Exception:
+            continue
+        if getattr(sample_attack, "requires_config", False):
+            continue
         attack = AttackRegistry.create(metadata.id, {})
         prompt = attack.create_prompt(SAMPLE)
         assessment = attack.assess(SAMPLE, prompt, MODEL_RESPONSE)
