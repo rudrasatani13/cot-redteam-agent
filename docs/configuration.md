@@ -20,7 +20,8 @@ Remote providers set `api_key_env` to an environment variable **name**.
 Values are resolved at provider construction and never written to manifests,
 logs, SQLite, or `config show` output.
 
-Local kinds `vllm` and `llamacpp` may omit credentials.
+Local kinds `vllm`, `llamacpp`, and `mock` may omit credentials; the `mock`
+kind needs no `base_url` either and is intended for keyless demos and CI.
 An explicitly configured `openai_compatible` provider requires `base_url` and
 may omit `api_key_env` for an unauthenticated local endpoint.
 
