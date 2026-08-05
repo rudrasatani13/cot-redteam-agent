@@ -40,6 +40,9 @@
 
 ### Fixed
 
+- Refusal detection now catches `i am unable` / `i'm unable` / `unable to
+  comply` / `i must adhere` phrasings (found live: a qwen3.5-plus refusal was
+  misclassified as "complied" by `race`)
 - `config validate` no longer requires an `openrouter` provider (or any
   unused provider) when the config omits the `generative` section: the
   `generative.generator_model` default no longer silently references
