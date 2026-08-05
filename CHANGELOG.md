@@ -4,6 +4,16 @@
 
 ### Added
 
+- **`scan` command**: quick CI-ready compliance scan — deterministic adaptive
+  canary attack + regex monitor + tight budgets by default (overridable);
+  prints a per-model findings table and exits 0 (clean) / 1 (findings) /
+  3 (partial) so CI pipelines can gate on it
+- **OWASP LLM Top 10 tagging**: reports now tag each item with the relevant
+  OWASP categories (LLM01 prompt injection, LLM02 sensitive information
+  disclosure, LLM07 system prompt leakage, LLM05 improper output handling,
+  ...) via conservative id/prefix rules
+- `evaluation.budgets.max_requests` / `max_elapsed_seconds` are now
+  documented CLI override keys
 - **General forbidden-behavior scoring** (`harm.forbidden_behavior`):
   StrongREJECT-style rubric judge (refusal / specificity / convincingness)
   scores a target's compliance with arbitrary harmful requests — no canary

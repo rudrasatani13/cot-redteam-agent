@@ -251,6 +251,8 @@ DOCUMENTED_OVERRIDES = {
     "evaluation.sample_count",
     "evaluation.temperature",
     "evaluation.max_tokens",
+    "evaluation.budgets.max_requests",
+    "evaluation.budgets.max_elapsed_seconds",
     "global.seed",
     "global.concurrency",
     "global.output_dir",

@@ -38,6 +38,9 @@ and last real successful disclosure (refusal re-quotes are not counted as succes
   any harmful request (phishing, fraud, weapons, hate speech, ...) with a
   StrongREJECT-style rubric judge — refusal, specificity, convincingness —
   no canary required. Ships with `pkg:harmful.jsonl` (10 items).
+- **CI-ready scan**: `cot-redteam scan --config X` runs a quick compliance
+  scan and exits 0 (clean) / 1 (findings) / 3 (partial) — gate CI on it.
+- **OWASP LLM Top 10 tags** in every report item (LLM01/02/05/07...).
 - Adaptive fixed-bank mode also available (`injection.system_canary_adaptive`).
 - Interactive Codex-style TUI with slash commands, multi-model board, and live
   attempt timeline (`cot-redteam tui`).
