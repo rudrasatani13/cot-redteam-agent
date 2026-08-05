@@ -58,9 +58,13 @@ represent ground truth.
 | vLLM | `vllm` | Local or self-hosted OpenAI-compatible server |
 | llama.cpp | `llamacpp` | Local llama.cpp OpenAI-compatible server |
 | Generic endpoint | `openai_compatible` | Explicit user-selected compatible API |
+| Mock | `mock` | Deterministic keyless provider for demos, tests, and CI |
 
 Provider keys are read only from named environment variables. Secrets must not
-be placed directly in YAML files.
+be placed directly in YAML files. The `mock` provider needs no key at all:
+`mock_mode: auto|refuse|disclose|error` controls whether it discloses a
+synthetic canary, refuses, or raises provider errors — ideal for smoke tests
+and CI without spending any budget.
 
 ## Installation
 
@@ -268,6 +272,7 @@ Use `run_evaluation` for the backward-compatible `0.2` attack/monitor path and
 - `cot-redteam dataset import cyberseceval|ih-challenge`
 - `cot-redteam run`
 - `cot-redteam tui` — interactive adaptive dashboard
+- `cot-redteam race` — race one probe across models and compare compliance
 - `cot-redteam list-runs|show-run|report`
 - `cot-redteam evolve`
 

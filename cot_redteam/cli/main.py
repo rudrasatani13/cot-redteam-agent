@@ -113,6 +113,18 @@ def _build_parser() -> argparse.ArgumentParser:
     evolve.add_argument("--generator-model", default=None)
     evolve.add_argument("--target-model", default=None)
 
+    race = sub.add_parser(
+        "race",
+        help="race one probe across models and compare compliance",
+    )
+    race.add_argument("--config", required=True)
+    race.add_argument("--model", action="append", default=None, dest="race_models")
+    race.add_argument(
+        "--prompt", default=None, help="probe text (default: canary extraction probe)"
+    )
+    race.add_argument("--attack", default=None, help="optional attack id to frame the probe")
+    race.add_argument("--max-tokens", type=int, default=1024)
+
     tui = sub.add_parser(
         "tui",
         help="interactive Codex-style adaptive red-team TUI (rich + textual)",
@@ -465,6 +477,36 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     return asyncio.run(_evolve_async(args))
 
 
+def cmd_race(args: argparse.Namespace) -> int:
+    return asyncio.run(_race_async(args))
+
+
+async def _race_async(args: argparse.Namespace) -> int:
+    from cot_redteam.eval.race import DEFAULT_RACE_PROMPT, format_race_table, run_race
+    from cot_redteam.providers.factory import ProviderFactory
+
+    config = load_config(args.config)
+    validate_config(config, require_credentials=True)
+    models = args.race_models or [str(m) for m in config.evaluation.models]
+    if not models:
+        raise ConfigurationError("race requires --model or evaluation.models")
+    prompt = args.prompt or DEFAULT_RACE_PROMPT
+    factory = ProviderFactory(config)
+    try:
+        results = await run_race(
+            config,
+            models,
+            prompt,
+            attack_id=args.attack,
+            factory=factory,
+            max_tokens=args.max_tokens,
+        )
+    finally:
+        await factory.aclose()
+    print(format_race_table(results))
+    return EXIT_OK
+
+
 def cmd_tui(args: argparse.Namespace) -> int:
     from cot_redteam.tui.app import run_tui_sync
 
@@ -496,6 +538,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "show-run": cmd_show_run,
         "report": cmd_report,
         "evolve": cmd_evolve,
+        "race": cmd_race,
     }
     try:
         if args.command == "config":

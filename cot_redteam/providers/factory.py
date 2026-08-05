@@ -11,6 +11,7 @@ from cot_redteam.core.errors import ConfigurationError
 from cot_redteam.core.types import ModelRef
 from cot_redteam.providers.anthropic import AnthropicProvider
 from cot_redteam.providers.base import Provider
+from cot_redteam.providers.mock import MockProvider
 from cot_redteam.providers.openai_compatible import OpenAICompatibleProvider
 
 TransportFactory = Callable[[ResolvedProviderSettings], httpx.AsyncBaseTransport | None]
@@ -53,6 +54,8 @@ class ProviderFactory:
             transport = self._transport_factory(resolved)
         if resolved.kind == "anthropic":
             provider: Provider = AnthropicProvider(resolved, transport=transport)
+        elif resolved.kind == "mock":
+            provider = MockProvider(resolved)
         else:
             provider = OpenAICompatibleProvider(resolved, transport=transport)
         self._cache[model.provider] = provider
