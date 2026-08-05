@@ -4,6 +4,11 @@
 
 ### Added
 
+- Headless test suite for the interactive TUI: command handling, event
+  consumption, run/stop flows (with the keyless mock provider), Textual
+  mount via `run_test`, Rich live dashboard, and render edge cases. TUI
+  coverage: app 14%→75%, interactive 11%→81%, state 61%→89%, render 77%→94%
+  (package total 77.7%→84.0%)
 - Agentic attack `injection.system_canary_agent`: seed bank → classify defense →
   invent next technique until real final-text disclosure or `max_attempts`
 - Deterministic technique catalog (format, transform, authority, social, …)
