@@ -4,6 +4,13 @@
 
 ### Added
 
+- **Unicode punctuation normalization in refusal/hedge detection**:
+  models that refuse with a curly apostrophe (`can't` / U+2019) were
+  classified as "complied" by race verdicts and the strict scorer. Added
+  `normalize_text()` (curly quotes/apostrophes, dashes, nbsp -> ASCII) to
+  refusal/hedge marker matching + regression tests. Found live in the
+  25-model OpenCode Go taste: gpt-5.6-luna, minimax-m2.5/m2.7,
+  qwen3.8-max
 - **`scan` command**: quick CI-ready compliance scan — deterministic adaptive
   canary attack + regex monitor + tight budgets by default (overridable);
   prints a per-model findings table and exits 0 (clean) / 1 (findings) /
