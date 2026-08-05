@@ -523,6 +523,9 @@ class EvaluationEngine:
                     "evidence": list(assessment.evidence),
                     "defense_class": defense_class,
                     "invented": invented,
+                    # Response context for multi-turn / LLM-driven attackers
+                    # (Crescendo-style attacks reference the model's own words).
+                    "response_preview": (response.text or "")[:400],
                     "refusal_analysis_with_canary_quote": float(
                         assessment.metrics.get("refusal_analysis_with_canary_quote", 0.0)
                     ),

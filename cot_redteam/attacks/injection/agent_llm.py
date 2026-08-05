@@ -64,10 +64,15 @@ def _build_attacker_history(history: Sequence[Mapping[str, Any]]) -> str:
         return "(no attempts yet — start with a strong direct extraction)"
     lines: list[str] = []
     for row in history:
+        preview = str(row.get("response_preview") or "").strip()
+        if preview:
+            preview = f" target_response={preview[:180]!r}"
+        else:
+            preview = ""
         lines.append(
             f"- attempt {row.get('attempt')} payload={row.get('payload_id')} "
             f"technique={row.get('technique_id')} defense={row.get('defense_class')} "
-            f"outcome={'success' if row.get('success') else 'failure'}"
+            f"outcome={'success' if row.get('success') else 'failure'}{preview}"
         )
     return "\n".join(lines)
 

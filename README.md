@@ -31,6 +31,9 @@ and last real successful disclosure (refusal re-quotes are not counted as succes
   model writes the next extraction prompts from the conversation (PAIR loop,
   TAP-style candidate branching) and falls back to the deterministic catalog
   if the attacker provider fails. Requires `attacker_model` in `attack_config`.
+- **Crescendo multi-turn attack** (`injection.crescendo_canary`): gradual
+  5-rung escalation that references the model's own replies, from a benign
+  question to an exact token ask. No attacker model needed.
 - Adaptive fixed-bank mode also available (`injection.system_canary_adaptive`).
 - Interactive Codex-style TUI with slash commands, multi-model board, and live
   attempt timeline (`cot-redteam tui`).

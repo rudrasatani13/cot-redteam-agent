@@ -91,6 +91,19 @@ def render_markdown(report: ReportModel) -> str:
                     *_markdown_code(item.prompt.text),
                 ]
             )
+            trace = item.prompt.metadata.get("attempt_history")
+            if trace:
+                lines.extend(["", "#### Adaptive Attempt Trace", ""])
+                for row in trace:
+                    attempt = row.get("attempt", "?")
+                    payload = row.get("payload_id", "?")
+                    verdict = "SUCCESS" if row.get("success") else "FAIL"
+                    defense = row.get("defense_class", "?")
+                    preview = str(row.get("response_preview") or "").strip()
+                    lines.append(f"- **{attempt}. {payload}** — {verdict} (defense={defense})")
+                    if preview:
+                        lines.extend(["", *_markdown_code(preview)])
+                    lines.append("")
         if item.response is not None:
             lines.extend(
                 [

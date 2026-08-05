@@ -4,6 +4,17 @@
 
 ### Added
 
+- **Crescendo-style multi-turn attack** (`injection.crescendo_canary`):
+  gradual 5-rung escalation from a benign transparency question to an exact
+  token ask; each turn embeds the model's own previous reply for
+  conversational continuity (arXiv:2404.01833 pattern, deterministic ladder,
+  no attacker LLM required)
+- **Adaptive Attempt Trace in reports**: Markdown reports now render the
+  full attempt history (payload, verdict, defense class, response preview)
+  for adaptive/multi-turn runs, so the whole escalation is auditable
+- Engine attempt history now carries `response_preview` so multi-turn and
+  LLM-driven attacks can reference the model's actual words (also feeds the
+  LLM attacker's context)
 - **LLM-driven adaptive attacker** (`injection.system_canary_agent_llm`):
   PAIR/TAP-style attack where an attacker model writes extraction prompts
   from the full conversation history and latest defense class. Generates
