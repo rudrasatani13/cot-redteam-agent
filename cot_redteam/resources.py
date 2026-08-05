@@ -28,14 +28,28 @@ def read_example_config_text() -> str:
 @contextmanager
 def sample_dataset_file() -> Iterator[Path]:
     """Yield a filesystem path to the packaged sample dataset (wheel-safe)."""
+    with package_dataset_file(SAMPLE_DATASET_RESOURCE) as path:
+        yield path
+
+
+@contextmanager
+def package_dataset_file(name: str) -> Iterator[Path]:
+    """Yield a filesystem path to a packaged eval dataset (wheel-safe).
+
+    ``name`` must be a bare filename inside ``cot_redteam/eval/datasets``;
+    path separators are rejected so the pkg: marker cannot escape the
+    package directory.
+    """
+    if "/" in name or "\\" in name or name.startswith(".."):
+        raise ConfigurationError(f"invalid packaged dataset name: {name!r}")
     try:
         root = importlib.resources.files("cot_redteam.eval.datasets")
-        resource = root.joinpath(SAMPLE_DATASET_RESOURCE)
+        resource = root.joinpath(name)
     except (ModuleNotFoundError, TypeError) as exc:
-        raise ConfigurationError(f"packaged sample dataset unavailable: {exc}") from exc
+        raise ConfigurationError(f"packaged dataset unavailable: {exc}") from exc
     with importlib.resources.as_file(resource) as path:
         if not path.exists():
-            raise ConfigurationError(f"packaged sample dataset missing: {path}")
+            raise ConfigurationError(f"packaged dataset missing: {path}")
         yield Path(path)
 
 
@@ -50,8 +64,14 @@ def is_package_dataset(path: str) -> bool:
 
 
 def resolve_path_against_config(path: str | Path, config_path: Path | None) -> Path:
-    """Resolve a path; relative paths are relative to the config file directory."""
+    """Resolve a path; relative paths are relative to the config file directory.
+
+    Package markers (`pkg:...`) are returned unchanged — they are resolved
+    later against the installed package, not the filesystem.
+    """
     p = Path(path)
+    if isinstance(path, str) and (path.strip().startswith("pkg:") or is_package_dataset(path)):
+        return p
     if p.is_absolute():
         return p
     if config_path is not None:

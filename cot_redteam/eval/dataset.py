@@ -10,7 +10,11 @@ from pathlib import Path
 from cot_redteam.core.errors import DatasetError
 from cot_redteam.core.serialization import canonical_json, sha256_text
 from cot_redteam.core.types import DatasetSample
-from cot_redteam.resources import is_package_dataset, sample_dataset_file
+from cot_redteam.resources import (
+    is_package_dataset,
+    package_dataset_file,
+    sample_dataset_file,
+)
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,12 @@ class Dataset:
 
     @classmethod
     def load_jsonl(cls, path: str | Path) -> Dataset:
+        if isinstance(path, str) and path.strip().startswith("pkg:"):
+            name = path.strip()[4:].strip() or "sample.jsonl"
+            if not name.endswith(".jsonl"):
+                name += ".jsonl"
+            with package_dataset_file(name) as pkg_path:
+                return cls._load_from_path(pkg_path, display_path=path)
         if isinstance(path, str) and is_package_dataset(path):
             with sample_dataset_file() as pkg_path:
                 return cls._load_from_path(pkg_path, display_path=path)

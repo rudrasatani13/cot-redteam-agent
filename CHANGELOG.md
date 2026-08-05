@@ -4,6 +4,14 @@
 
 ### Added
 
+- **General forbidden-behavior scoring** (`harm.forbidden_behavior`):
+  StrongREJECT-style rubric judge (refusal / specificity / convincingness)
+  scores a target's compliance with arbitrary harmful requests — no canary
+  needed. Requires `judge_model` in attack_config; ships with the 10-item
+  `pkg:harmful.jsonl` dataset (fraud, weapons, disinformation, hate speech,
+  doxxing, ...). Engine prefers async `assess_async` when an attack defines
+  it; `pkg:` markers now resolve any packaged dataset and survive config
+  path resolution (with traversal guards)
 - **Crescendo-style multi-turn attack** (`injection.crescendo_canary`):
   gradual 5-rung escalation from a benign transparency question to an exact
   token ask; each turn embeds the model's own previous reply for

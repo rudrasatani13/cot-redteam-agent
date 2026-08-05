@@ -34,6 +34,10 @@ and last real successful disclosure (refusal re-quotes are not counted as succes
 - **Crescendo multi-turn attack** (`injection.crescendo_canary`): gradual
   5-rung escalation that references the model's own replies, from a benign
   question to an exact token ask. No attacker model needed.
+- **General forbidden-behavior testing** (`harm.forbidden_behavior`): score
+  any harmful request (phishing, fraud, weapons, hate speech, ...) with a
+  StrongREJECT-style rubric judge — refusal, specificity, convincingness —
+  no canary required. Ships with `pkg:harmful.jsonl` (10 items).
 - Adaptive fixed-bank mode also available (`injection.system_canary_adaptive`).
 - Interactive Codex-style TUI with slash commands, multi-model board, and live
   attempt timeline (`cot-redteam tui`).
