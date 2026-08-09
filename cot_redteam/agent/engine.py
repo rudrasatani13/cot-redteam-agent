@@ -10,6 +10,7 @@ world/oracle/budget failures can never produce a clean security result.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from cot_redteam.agent.config import AgentSecuritySettings
 from cot_redteam.agent.gateway import ToolGateway
@@ -106,6 +107,8 @@ class AgentExecutionEngine:
         budget: BudgetTracker,
         settings: AgentSecuritySettings,
         progress: ProgressCallback | None = None,
+        run_store: object | None = None,
+        manifest: dict[str, Any] | None = None,
     ) -> None:
         self.scenario = scenario
         self.fixture = fixture
@@ -115,6 +118,8 @@ class AgentExecutionEngine:
         self.budget = budget
         self.settings = settings
         self.progress = progress
+        self.run_store = run_store
+        self.manifest = manifest
 
     def _new_gateway(self, recorder: TrajectoryRecorder) -> ToolGateway:
         return ToolGateway(
@@ -181,11 +186,26 @@ class AgentExecutionEngine:
         seed: int,
     ) -> AgentRun:
         started_at = datetime.now(timezone.utc)
+        retention_settings = self.settings.retention
+        store = self.run_store
+        event_sink = None
+        if store is not None:
+
+            def _sink(envelope: Any) -> None:
+                store.append_agent_events(  # type: ignore[attr-defined]
+                    run_id,
+                    [envelope],
+                    retention=retention_settings,
+                )
+
+            event_sink = _sink
+            self._begin_run_row(run_id, session_id, started_at, store)
         recorder = TrajectoryRecorder(
             run_id=run_id,
             session_id=session_id,
             agent_id=self.target.id,
             progress=self.progress,
+            event_sink=event_sink,
         )
         gateway = self._new_gateway(recorder)
         approvals = PolicyApprovalGate(approved_actions=self.scenario.approved_actions)
@@ -230,7 +250,16 @@ class AgentExecutionEngine:
         status = _status_for_outcome(outcome)
         findings = self._build_findings(oracle_results)
 
-        return AgentRun(
+        metadata: dict[str, Any] = {
+            "retained": {
+                "final_response": retention_settings.retain_final_response,
+                "tool_arguments": retention_settings.retain_tool_arguments,
+                "tool_results": retention_settings.retain_tool_results,
+                "memory_values": retention_settings.retain_memory_values,
+                "world_values": retention_settings.retain_world_values,
+            }
+        }
+        run = AgentRun(
             run_id=run_id,
             session_id=session_id,
             scenario_ref=VersionedRef(id=self.scenario.id, version=self.scenario.version),
@@ -251,4 +280,41 @@ class AgentExecutionEngine:
             started_at=started_at,
             completed_at=datetime.now(timezone.utc),
             error=target_error,
+            metadata=metadata,
+        )
+        if store is not None:
+            store.finalize_agent_run(  # type: ignore[attr-defined]
+                run,
+                retention=retention_settings,
+                manifest=self.manifest,
+            )
+        return run
+
+    def _begin_run_row(
+        self,
+        run_id: str,
+        session_id: str,
+        started_at: datetime,
+        store: object,
+    ) -> None:
+        from cot_redteam.agent.types import AgentTrajectory
+
+        shell = AgentRun(
+            run_id=run_id,
+            session_id=session_id,
+            scenario_ref=VersionedRef(id=self.scenario.id, version=self.scenario.version),
+            target_ref=VersionedRef(id=self.target.id, version=self.target.version),
+            world_ref=VersionedRef(id=self.world.world_id, version=self.world.world_version),
+            attack_ref=VersionedRef(
+                id=f"scripted:{self.fixture.fixture}",
+                version=self.fixture.version,
+            ),
+            status=AgentRunStatus.RUNNING,
+            trajectory=AgentTrajectory(run_id=run_id, session_id=session_id, events=()),
+            budget_snapshot={},
+            started_at=started_at,
+        )
+        store.begin_agent_run(  # type: ignore[attr-defined]
+            shell,
+            retention=self.settings.retention,
         )

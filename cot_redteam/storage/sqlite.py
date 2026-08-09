@@ -4,10 +4,24 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from cot_redteam.agent.config import AgentRetentionSettings
+from cot_redteam.agent.retention import AgentSanitizer
+from cot_redteam.agent.types import (
+    AGENT_EVENT_SCHEMA_VERSION,
+    AgentEventUnion,
+    AgentOutcome,
+    AgentRun,
+    AgentRunStatus,
+    Finding,
+    OracleResult,
+    VersionedRef,
+    validate_agent_event,
+)
 from cot_redteam.benchmark.conversation import (
     ConversationStatus,
     ConversationTranscript,
@@ -149,6 +163,76 @@ MIGRATIONS: list[tuple[int, str]] = [
             raw_input TEXT NOT NULL,
             raw_output TEXT,
             UNIQUE(trial_id, judge_index)
+        );
+        """,
+    ),
+    (
+        3,
+        """
+        CREATE TABLE agent_runs (
+            run_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            schema_version INTEGER NOT NULL,
+            scenario_id TEXT NOT NULL,
+            scenario_version TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            target_version TEXT NOT NULL,
+            world_id TEXT NOT NULL,
+            world_version TEXT NOT NULL,
+            attack_id TEXT NOT NULL,
+            attack_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            outcome TEXT,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            pre_snapshot_digest TEXT,
+            post_snapshot_digest TEXT,
+            trajectory_digest TEXT,
+            budget_json TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            manifest_json TEXT,
+            error TEXT
+        );
+        CREATE TABLE agent_trajectory_events (
+            run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+            sequence_no INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            parent_event_id TEXT,
+            session_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            schema_version INTEGER NOT NULL,
+            event_json TEXT NOT NULL,
+            PRIMARY KEY(run_id, sequence_no),
+            UNIQUE(run_id, event_id)
+        );
+        CREATE TABLE agent_oracle_results (
+            run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+            oracle_id TEXT NOT NULL,
+            oracle_version TEXT NOT NULL,
+            verdict TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            PRIMARY KEY(run_id, oracle_id, oracle_version)
+        );
+        CREATE TABLE agent_findings (
+            finding_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+            oracle_id TEXT NOT NULL,
+            category TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            finding_json TEXT NOT NULL
+        );
+        CREATE TABLE replay_artifacts (
+            replay_id TEXT PRIMARY KEY,
+            original_run_id TEXT NOT NULL,
+            schema_version INTEGER NOT NULL,
+            relative_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            byte_length INTEGER NOT NULL,
+            world_fixture_digest TEXT NOT NULL,
+            trajectory_digest TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL
         );
         """,
     ),
@@ -746,3 +830,363 @@ class SQLiteRunStore:
             metrics=data.get("metrics") or {},
             explanation=data.get("explanation") or "",
         )
+
+    # -- agent persistence --------------------------------------------------
+
+    def begin_agent_run(
+        self,
+        run: AgentRun,
+        *,
+        retention: AgentRetentionSettings | None = None,
+    ) -> None:
+        """Insert (or replace) the run row as RUNNING before target execution."""
+        del retention
+        if run.status is not AgentRunStatus.RUNNING:
+            raise ValueError("begin_agent_run requires a RUNNING run")
+        conn = self.connection
+        try:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM agent_runs WHERE run_id = ?", (run.run_id,))
+            conn.execute(
+                """
+                INSERT INTO agent_runs(
+                    run_id, session_id, schema_version,
+                    scenario_id, scenario_version, target_id, target_version,
+                    world_id, world_version, attack_id, attack_version,
+                    status, outcome, started_at, completed_at,
+                    pre_snapshot_digest, post_snapshot_digest, trajectory_digest,
+                    budget_json, metadata_json, manifest_json, error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run.run_id,
+                    run.session_id,
+                    run.schema_version,
+                    run.scenario_ref.id,
+                    run.scenario_ref.version,
+                    run.target_ref.id,
+                    run.target_ref.version,
+                    run.world_ref.id,
+                    run.world_ref.version,
+                    run.attack_ref.id,
+                    run.attack_ref.version,
+                    run.status.value,
+                    run.outcome.value if run.outcome else None,
+                    _dt(run.started_at),
+                    _dt(run.completed_at),
+                    run.pre_snapshot_digest,
+                    run.post_snapshot_digest,
+                    run.trajectory.digest if run.trajectory.events else None,
+                    canonical_json(run.budget_snapshot),
+                    canonical_json(run.metadata),
+                    canonical_json(run.metadata.get("manifest"))
+                    if run.metadata.get("manifest")
+                    else None,
+                    run.error,
+                ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def append_agent_events(
+        self,
+        run_id: str,
+        events: Sequence[Mapping[str, object]],
+        *,
+        retention: AgentRetentionSettings | None = None,
+    ) -> None:
+        """Append sanitized event envelopes transactionally (append-only).
+
+        The store sanitizes again at this boundary even when the caller
+        claims the envelopes are already sanitized (defense in depth).
+        """
+        if not events:
+            return
+        sanitizer = AgentSanitizer(retention) if retention is not None else None
+        conn = self.connection
+        try:
+            conn.execute("BEGIN")
+            for envelope in events:
+                data = (
+                    sanitizer.sanitize_event(envelope) if sanitizer is not None else dict(envelope)
+                )
+                conn.execute(
+                    """
+                    INSERT INTO agent_trajectory_events(
+                        run_id, sequence_no, event_id, event_type, parent_event_id,
+                        session_id, agent_id, schema_version, event_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        int(cast("Any", data["sequence_no"])),
+                        str(data["event_id"]),
+                        str(data["event_type"]),
+                        data.get("parent_event_id"),
+                        str(data["session_id"]),
+                        str(data["agent_id"]),
+                        int(cast("Any", data.get("schema_version", AGENT_EVENT_SCHEMA_VERSION))),
+                        canonical_json(data),
+                    ),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def save_agent_oracle_results(
+        self,
+        run_id: str,
+        results: Sequence[OracleResult],
+    ) -> None:
+        """Replace oracle results for a run in one transaction."""
+        conn = self.connection
+        try:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM agent_oracle_results WHERE run_id = ?", (run_id,))
+            for result in results:
+                conn.execute(
+                    """
+                    INSERT INTO agent_oracle_results(
+                        run_id, oracle_id, oracle_version, verdict, result_json
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        result.oracle_id,
+                        result.oracle_version,
+                        result.verdict.value,
+                        canonical_json(result),
+                    ),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def save_agent_findings(self, run_id: str, findings: Sequence[Finding]) -> None:
+        """Replace findings for a run in one transaction."""
+        conn = self.connection
+        try:
+            conn.execute("BEGIN")
+            conn.execute(
+                "DELETE FROM agent_findings WHERE finding_id IN "
+                "(SELECT finding_id FROM agent_findings WHERE run_id = ?)",
+                (run_id,),
+            )
+            for finding in findings:
+                conn.execute(
+                    """
+                    INSERT INTO agent_findings(
+                        finding_id, run_id, oracle_id, category, severity, finding_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        finding.finding_id,
+                        run_id,
+                        finding.oracle_id,
+                        finding.category,
+                        finding.severity,
+                        canonical_json(finding),
+                    ),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def finalize_agent_run(
+        self,
+        run: AgentRun,
+        *,
+        retention: AgentRetentionSettings | None = None,
+        manifest: dict[str, Any] | None = None,
+    ) -> None:
+        """Finalize status/outcome/digests plus oracle results and findings."""
+        self.save_agent_oracle_results(run.run_id, run.oracle_results)
+        self.save_agent_findings(run.run_id, run.findings)
+        conn = self.connection
+        try:
+            conn.execute("BEGIN")
+            conn.execute(
+                """
+                UPDATE agent_runs SET
+                    status = ?, outcome = ?, completed_at = ?,
+                    pre_snapshot_digest = ?, post_snapshot_digest = ?,
+                    trajectory_digest = ?, budget_json = ?, manifest_json = ?, error = ?
+                WHERE run_id = ?
+                """,
+                (
+                    run.status.value,
+                    run.outcome.value if run.outcome else None,
+                    _dt(run.completed_at),
+                    run.pre_snapshot_digest,
+                    run.post_snapshot_digest,
+                    run.trajectory.digest,
+                    canonical_json(run.budget_snapshot),
+                    canonical_json(manifest) if manifest is not None else None,
+                    run.error,
+                    run.run_id,
+                ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def recover_incomplete_agent_runs(self, exclude_run_id: str | None = None) -> int:
+        """Mark prior non-current RUNNING rows as INTERRUPTED. Never marks
+        them completed or secure."""
+        params: tuple[Any, ...] = ()
+        sql = "UPDATE agent_runs SET status = ? WHERE status = ?"
+        if exclude_run_id is not None:
+            sql += " AND run_id != ?"
+            params = (
+                AgentRunStatus.INTERRUPTED.value,
+                AgentRunStatus.RUNNING.value,
+                exclude_run_id,
+            )
+        else:
+            params = (AgentRunStatus.INTERRUPTED.value, AgentRunStatus.RUNNING.value)
+        cursor = self.connection.execute(sql, params)
+        self.connection.commit()
+        return int(cursor.rowcount)
+
+    def get_agent_run(
+        self,
+        run_id: str,
+        *,
+        retention_view: AgentRetentionSettings | None = None,
+    ) -> AgentRun | None:
+        """Load a complete agent run; rejects malformed/incompatible data."""
+        row = self.connection.execute(
+            "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        event_rows = self.connection.execute(
+            "SELECT * FROM agent_trajectory_events WHERE run_id = ? ORDER BY sequence_no",
+            (run_id,),
+        ).fetchall()
+        events: list[AgentEventUnion] = []
+        for event_row in event_rows:
+            data = json.loads(event_row["event_json"])
+            events.append(validate_agent_event(data))
+        from cot_redteam.agent.types import AgentTrajectory
+
+        trajectory = AgentTrajectory(
+            run_id=run_id,
+            session_id=row["session_id"],
+            events=tuple(events),
+            digest=row["trajectory_digest"],
+        )
+        oracle_rows = self.connection.execute(
+            "SELECT result_json FROM agent_oracle_results WHERE run_id = ? ORDER BY oracle_id",
+            (run_id,),
+        ).fetchall()
+        oracle_results = tuple(
+            OracleResult.model_validate(json.loads(value["result_json"])) for value in oracle_rows
+        )
+        finding_rows = self.connection.execute(
+            "SELECT finding_json FROM agent_findings WHERE run_id = ? ORDER BY finding_id",
+            (run_id,),
+        ).fetchall()
+        findings = tuple(
+            Finding.model_validate(json.loads(value["finding_json"])) for value in finding_rows
+        )
+        started = _parse_dt(row["started_at"]) or datetime.now(timezone.utc)
+        run = AgentRun(
+            run_id=run_id,
+            session_id=row["session_id"],
+            schema_version=int(row["schema_version"]),
+            scenario_ref=VersionedRef(id=row["scenario_id"], version=row["scenario_version"]),
+            target_ref=VersionedRef(id=row["target_id"], version=row["target_version"]),
+            world_ref=VersionedRef(id=row["world_id"], version=row["world_version"]),
+            attack_ref=VersionedRef(id=row["attack_id"], version=row["attack_version"]),
+            status=AgentRunStatus(row["status"]),
+            outcome=AgentOutcome(row["outcome"]) if row["outcome"] else None,
+            trajectory=trajectory,
+            pre_snapshot_digest=row["pre_snapshot_digest"],
+            post_snapshot_digest=row["post_snapshot_digest"],
+            oracle_results=oracle_results,
+            findings=findings,
+            budget_snapshot=json.loads(row["budget_json"]),
+            started_at=started,
+            completed_at=_parse_dt(row["completed_at"]),
+            error=row["error"],
+            metadata=json.loads(row["metadata_json"] or "{}"),
+        )
+        if retention_view is not None:
+            from cot_redteam.agent.retention import sanitize_agent_run
+
+            run = sanitize_agent_run(run, retention_view)
+        return run
+
+    def list_agent_runs(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT run_id, session_id, scenario_id, target_id, status, outcome,
+                   started_at, completed_at, trajectory_digest
+            FROM agent_runs ORDER BY started_at DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "run_id": row["run_id"],
+                "session_id": row["session_id"],
+                "scenario_id": row["scenario_id"],
+                "target_id": row["target_id"],
+                "status": row["status"],
+                "outcome": row["outcome"],
+                "started_at": row["started_at"],
+                "completed_at": row["completed_at"],
+                "trajectory_digest": row["trajectory_digest"],
+            }
+            for row in rows
+        ]
+
+    def save_replay_record(
+        self,
+        *,
+        replay_id: str,
+        original_run_id: str,
+        schema_version: int,
+        relative_path: str,
+        sha256: str,
+        byte_length: int,
+        world_fixture_digest: str,
+        trajectory_digest: str,
+        metadata: Mapping[str, Any],
+    ) -> None:
+        conn = self.connection
+        try:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM replay_artifacts WHERE replay_id = ?", (replay_id,))
+            conn.execute(
+                """
+                INSERT INTO replay_artifacts(
+                    replay_id, original_run_id, schema_version, relative_path,
+                    sha256, byte_length, world_fixture_digest, trajectory_digest,
+                    created_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    replay_id,
+                    original_run_id,
+                    schema_version,
+                    relative_path,
+                    sha256,
+                    byte_length,
+                    world_fixture_digest,
+                    trajectory_digest,
+                    _dt(datetime.now(timezone.utc)),
+                    canonical_json(dict(metadata)),
+                ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise

@@ -8,6 +8,10 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cot_redteam.agent.types import AgentRun
 
 from cot_redteam.benchmark.policies import BUILTIN_POLICIES
 from cot_redteam.benchmark.results import BenchmarkRunResult
@@ -261,3 +265,79 @@ def build_benchmark_manifest(
 
 def _dt_manifest(value: datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
+
+
+def build_agent_manifest(
+    run: AgentRun,
+    *,
+    config: AppConfig | None = None,
+    artifacts: Sequence[ArtifactRecord] = (),
+    git_reader: GitReader | None = None,
+    dist_reader: DistReader | None = None,
+) -> dict[str, JsonValue]:
+    """Build a sanitized, version-complete v0.6 agent run manifest."""
+    from cot_redteam.agent.types import AGENT_EVENT_SCHEMA_VERSION
+
+    git_reader = git_reader or _default_git_reader
+    dist_reader = dist_reader or _default_dist_reader
+    manifest: dict[str, JsonValue] = {
+        "schema_version": AGENT_EVENT_SCHEMA_VERSION,
+        "run_id": run.run_id,
+        "session_id": run.session_id,
+        "status": run.status.value,
+        "outcome": run.outcome.value if run.outcome else None,
+        "started_at": _dt_manifest(run.started_at),
+        "completed_at": _dt_manifest(run.completed_at) if run.completed_at else None,
+        "scenario": {"id": run.scenario_ref.id, "version": run.scenario_ref.version},
+        "target": {"id": run.target_ref.id, "version": run.target_ref.version},
+        "world": {"id": run.world_ref.id, "version": run.world_ref.version},
+        "attack": {"id": run.attack_ref.id, "version": run.attack_ref.version},
+        "config": redacted_config(config) if config is not None else None,
+        "config_digest": (
+            sha256_text(canonical_json(redacted_config(config))) if config is not None else None
+        ),
+        "pre_snapshot_digest": run.pre_snapshot_digest,
+        "post_snapshot_digest": run.post_snapshot_digest,
+        "trajectory_digest": run.trajectory.digest,
+        "event_count": len(run.trajectory.events),
+        "oracles": [
+            {
+                "oracle_id": result.oracle_id,
+                "oracle_version": result.oracle_version,
+                "verdict": result.verdict.value,
+                "evidence_event_ids": list(result.evidence_event_ids),
+            }
+            for result in run.oracle_results
+        ],
+        "findings": [
+            {
+                "finding_id": finding.finding_id,
+                "oracle_id": finding.oracle_id,
+                "category": finding.category,
+                "severity": finding.severity,
+                "evidence_event_ids": list(finding.evidence_event_ids),
+            }
+            for finding in run.findings
+        ],
+        "budget": run.budget_snapshot,
+        "artifacts": [
+            {
+                "path": artifact.relative_path,
+                "media_type": artifact.media_type,
+                "byte_length": artifact.byte_length,
+                "sha256": artifact.sha256,
+            }
+            for artifact in artifacts
+        ],
+        "python": {"version": sys.version, "platform": platform.platform()},
+        "packages": dist_reader(),
+        "git": git_reader(),
+        "limitations": [
+            "Agent impact is proven only by observed simulated actions and "
+            "deterministic world state transitions.",
+            "Assistant text and LLM judge opinion are never proof of impact.",
+            "Support Agent World is the only executable world in this release.",
+        ],
+    }
+    manifest["manifest_digest"] = sha256_text(canonical_json(manifest))
+    return manifest
