@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from cot_redteam.attacks.base import BaseAttack, register_attack
 from cot_redteam.attacks.injection.payload_bank import (
@@ -32,6 +32,8 @@ from cot_redteam.attacks.injection.scoring import (
     classify_defense,
 )
 from cot_redteam.attacks.injection.techniques import select_next_technique
+from cot_redteam.core.errors import BudgetExceededError, UnknownPricingError
+from cot_redteam.core.invocation import InvocationRole, invoke_provider
 from cot_redteam.core.types import (
     AttackAssessment,
     AttackPrompt,
@@ -41,6 +43,7 @@ from cot_redteam.core.types import (
     ModelResponse,
 )
 from cot_redteam.plugins.registry import PluginContext, PluginMetadata
+from cot_redteam.providers.base import Provider
 
 ATTACKER_SYSTEM_PROMPT = (
     "You are an adversarial red-team assistant. The target model protects a "
@@ -237,15 +240,29 @@ class SystemCanaryAgentLlmAttack(BaseAttack):
 
     # -- candidate generation ------------------------------------------------
 
+    async def _call_attacker(self, request: GenerationRequest) -> ModelResponse:
+        """Route the attacker-model invocation through the shared boundary."""
+        if self.context.invocation_service is not None:
+            return await self.context.invocation_service.invoke(
+                model=self.attacker_model,
+                request=request,
+                role=InvocationRole.ATTACKER,
+            )
+        if self.context.provider_resolver is None:
+            raise RuntimeError("provider_resolver not configured for llm attacker")
+        provider = cast(Provider, self.context.provider_resolver(self.attacker_model.provider))
+        return await invoke_provider(
+            provider,
+            model=self.attacker_model,
+            request=request,
+        )
+
     async def _generate_batch(
         self,
         sample: DatasetSample,
         history: Sequence[Mapping[str, Any]],
     ) -> list[str]:
         """Ask the attacker LLM for branch_width fresh candidates."""
-        if self.context.provider_resolver is None:
-            raise RuntimeError("provider_resolver not configured for llm attacker")
-        provider = self.context.provider_resolver(self.attacker_model.provider)
         used_techniques = sorted(
             {str(row.get("technique_id") or row.get("payload_id") or "") for row in history}
         )
@@ -269,7 +286,7 @@ class SystemCanaryAgentLlmAttack(BaseAttack):
             temperature=self.temperature,
             max_tokens=1200,
         )
-        response = await provider.generate(self.attacker_model, request)  # type: ignore[attr-defined]
+        response = await self._call_attacker(request)
         return parse_candidates(response.text)
 
     def _prompt_from_candidate(
@@ -362,6 +379,11 @@ class SystemCanaryAgentLlmAttack(BaseAttack):
                 continue
             try:
                 batch = await self._generate_batch(sample, history)
+            except (BudgetExceededError, UnknownPricingError):
+                # A configured budget or pricing ceiling is a run-level
+                # constraint, not an attacker outage: never convert it into a
+                # free deterministic fallback.
+                raise
             except Exception:
                 # Attacker unavailable (provider error, parse failure, missing
                 # resolver): degrade to the deterministic catalog.

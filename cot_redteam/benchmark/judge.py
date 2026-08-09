@@ -18,6 +18,11 @@ from cot_redteam.benchmark.scoring import (
     ScorerVerdict,
 )
 from cot_redteam.core.errors import BudgetExceededError, ProviderError
+from cot_redteam.core.invocation import (
+    InvocationRole,
+    InvocationService,
+    invoke_provider,
+)
 from cot_redteam.core.serialization import canonical_json
 from cot_redteam.core.types import (
     GenerationRequest,
@@ -142,6 +147,7 @@ async def run_judge(
     temperature: float = 0.0,
     max_tokens: int = 512,
     estimate_cost: CostEstimator | None = None,
+    invocation_service: InvocationService | None = None,
 ) -> JudgeResult:
     judge_input = canonical_json(
         {
@@ -152,31 +158,40 @@ async def run_judge(
             "subject": request.subject,
         }
     )
-    try:
-        await budget.reserve_request()
-        response = await provider.generate(
-            model,
-            GenerationRequest(
-                messages=(
-                    Message(
-                        role=MessageRole.SYSTEM,
-                        content=_JUDGE_SYSTEM_PROMPT,
-                        trust=MessageTrust.TRUSTED,
-                        source="benchmark_judge",
-                    ),
-                    Message(
-                        role=MessageRole.USER,
-                        content=judge_input,
-                        trust=MessageTrust.UNTRUSTED,
-                        source="benchmark_subject",
-                    ),
-                ),
-                temperature=temperature,
-                max_tokens=max_tokens,
+    generation = GenerationRequest(
+        messages=(
+            Message(
+                role=MessageRole.SYSTEM,
+                content=_JUDGE_SYSTEM_PROMPT,
+                trust=MessageTrust.TRUSTED,
+                source="benchmark_judge",
             ),
-        )
-        estimated_cost = estimate_cost(model, response.usage) if estimate_cost else None
-        await budget.record_response(response.usage, estimated_cost=estimated_cost)
+            Message(
+                role=MessageRole.USER,
+                content=judge_input,
+                trust=MessageTrust.UNTRUSTED,
+                source="benchmark_subject",
+            ),
+        ),
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    try:
+        if invocation_service is not None:
+            response = await invocation_service.invoke(
+                model=model,
+                request=generation,
+                role=InvocationRole.JUDGE,
+                correlation_id=request.trial_id,
+            )
+        else:
+            response = await invoke_provider(
+                provider,
+                model=model,
+                request=generation,
+                budget=budget,
+                estimate_cost=estimate_cost,
+            )
     except (BudgetExceededError, ProviderError) as exc:
         return JudgeResult(
             outcome=_error_outcome(request, str(exc)),

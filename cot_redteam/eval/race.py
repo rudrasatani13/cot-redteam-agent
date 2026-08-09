@@ -22,6 +22,11 @@ from cot_redteam.attacks.injection.scoring import (
     looks_like_encoded_disclosure,
     looks_like_refusal_analysis,
 )
+from cot_redteam.core.invocation import (
+    InvocationRole,
+    InvocationService,
+    invoke_provider,
+)
 from cot_redteam.core.types import (
     DatasetSample,
     GenerationRequest,
@@ -97,6 +102,7 @@ async def run_race(
     *,
     attack_id: str | None = None,
     factory: ProviderFactory | None = None,
+    invocation_service: InvocationService | None = None,
     max_tokens: int = 1024,
 ) -> list[RaceResult]:
     """Race one probe across models. Accepts an injected factory for tests."""
@@ -118,7 +124,19 @@ async def run_race(
                         temperature=0.0,
                         max_tokens=max_tokens,
                     )
-                response = await provider.generate(ref, request)
+                if invocation_service is not None:
+                    response = await invocation_service.invoke(
+                        model=ref,
+                        request=request,
+                        role=InvocationRole.RACE,
+                        correlation_id=str(model_ref),
+                    )
+                else:
+                    response = await invoke_provider(
+                        provider,
+                        model=ref,
+                        request=request,
+                    )
             except Exception as exc:  # noqa: BLE001 - race should not abort
                 results.append(
                     RaceResult(

@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from cot_redteam.attacks.base import BaseAttack
 from cot_redteam.core.config import AppConfig
 from cot_redteam.core.errors import BudgetExceededError, ProviderError
+from cot_redteam.core.invocation import (
+    InvocationRole,
+    InvocationService,
+    invoke_provider,
+)
 from cot_redteam.core.reasoning import extract_visible_reasoning
 from cot_redteam.core.types import (
     AttackAssessment,
@@ -48,6 +54,7 @@ class EvaluationEngine:
         plugin_context: PluginContext | None = None,
         close_providers: bool = False,
         progress: ProgressCallback | None = None,
+        invocation_service: InvocationService | None = None,
     ) -> None:
         self.provider_factory = provider_factory
         self.attack_registry = attack_registry
@@ -58,13 +65,27 @@ class EvaluationEngine:
         self.close_providers = close_providers
         self.progress = progress
         self._provider_semaphores: dict[str, asyncio.Semaphore] = {}
-        self.plugin_context = plugin_context or PluginContext(
+        if invocation_service is None and config is not None:
+            invocation_service = InvocationService(
+                config,
+                provider_factory=provider_factory,
+                budget=budget,
+                progress=progress,
+            )
+        self.invocation_service = invocation_service
+        resolved_context = plugin_context or PluginContext(
             provider_resolver=lambda name: provider_factory.create(
                 __import__("cot_redteam.core.types", fromlist=["ModelRef"]).ModelRef(
                     provider=name, model_id="_"
                 )
             )
         )
+        if self.invocation_service is not None:
+            resolved_context = replace(
+                resolved_context,
+                invocation_service=self.invocation_service,
+            )
+        self.plugin_context = resolved_context
 
     def _provider_semaphore(self, provider_name: str) -> asyncio.Semaphore:
         if provider_name not in self._provider_semaphores:
@@ -191,14 +212,28 @@ class EvaluationEngine:
         item: PlannedItem,
         prompt: AttackPrompt,
     ) -> ModelResponse:
-        provider = self.provider_factory.create(item.model)
         request = GenerationRequest(
             prompt=prompt.text,
             system_prompt=prompt.system_prompt,
             temperature=plan.temperature,
             max_tokens=plan.max_tokens,
         )
-        raw_response = await provider.generate(item.model, request)
+        if self.invocation_service is not None:
+            raw_response = await self.invocation_service.invoke(
+                model=item.model,
+                request=request,
+                role=InvocationRole.TARGET,
+                correlation_id=item.item_id,
+            )
+        else:
+            provider = self.provider_factory.create(item.model)
+            raw_response = await invoke_provider(
+                provider,
+                model=item.model,
+                request=request,
+                budget=self.budget,
+                estimate_cost=lambda model, usage: self._estimate_cost(model.provider, usage),
+            )
         reasoning, source = extract_visible_reasoning(
             raw_response.text,
             list(plan.cot_delimiters),
@@ -210,7 +245,7 @@ class EvaluationEngine:
         ):
             reasoning = raw_response.reasoning
             source = raw_response.reasoning_source
-        response = ModelResponse(
+        return ModelResponse(
             text=raw_response.text,
             model=raw_response.model,
             reasoning=reasoning,
@@ -222,9 +257,6 @@ class EvaluationEngine:
             model_revision=raw_response.model_revision,
             metadata=raw_response.metadata,
         )
-        cost = self._estimate_cost(item.model.provider, response.usage)
-        await self.budget.record_response(response.usage, estimated_cost=cost)
-        return response
 
     async def _run_monitors(
         self,
@@ -426,25 +458,6 @@ class EvaluationEngine:
                     ),
                 ),
             )
-            try:
-                await self.budget.reserve_request()
-            except BudgetExceededError as exc:
-                result = EvaluationItem(
-                    item_id=item.item_id,
-                    model=item.model,
-                    attack_id=item.attack_id,
-                    sample_id=item.sample.id,
-                    status=ItemStatus.BUDGET_EXCEEDED,
-                    prompt=prompt,
-                    response=last_response,
-                    assessment=last_assessment,
-                    error=str(exc),
-                    started_at=started,
-                    completed_at=datetime.now(timezone.utc),
-                )
-                await self._emit_item_finished(plan, result)
-                return result
-
             try:
                 response = await self._generate_response(plan, item, prompt)
             except BudgetExceededError as exc:

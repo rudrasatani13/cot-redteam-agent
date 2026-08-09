@@ -15,6 +15,7 @@ from cot_redteam.benchmark.results import BenchmarkRunResult
 from cot_redteam.benchmark.retention import sanitize_trial_result
 from cot_redteam.benchmark.validation import load_configured_suites
 from cot_redteam.core.config import AppConfig, config_digest, load_config
+from cot_redteam.core.invocation import InvocationService
 from cot_redteam.core.types import EvaluationRun, ModelRef, TargetCapabilities
 from cot_redteam.eval.budgets import BudgetTracker
 from cot_redteam.eval.dataset import Dataset
@@ -60,6 +61,12 @@ async def run_evaluation(
     planner = RunPlanner(config, provider_factory=factory, dataset=dataset, plugin_context=context)
     plan = planner.create()
     budget = BudgetTracker(config.evaluation.budgets)
+    invocation_service = InvocationService(
+        config,
+        provider_factory=factory,
+        budget=budget,
+        progress=progress,
+    )
     engine = EvaluationEngine(
         factory,
         AttackRegistry,
@@ -70,6 +77,7 @@ async def run_evaluation(
         plugin_context=context,
         close_providers=False,  # API owns factory lifecycle
         progress=progress,
+        invocation_service=invocation_service,
     )
     try:
         run = await engine.run(plan)
@@ -170,11 +178,17 @@ async def run_benchmark(
     )
     plan = planner.create()
     started_at = datetime.now(timezone.utc)
+    budget = BudgetTracker(config.evaluation.budgets)
     try:
         execution = await BenchmarkEngine(
             config,
             factory,
-            BudgetTracker(config.evaluation.budgets),
+            budget,
+            invocation_service=InvocationService(
+                config,
+                provider_factory=factory,
+                budget=budget,
+            ),
         ).run(plan)
     finally:
         if owns_factory:

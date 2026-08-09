@@ -25,7 +25,7 @@ Pricing semantics:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
@@ -40,7 +40,10 @@ from cot_redteam.eval.events import (
     RunEventKind,
     emit,
 )
+from cot_redteam.providers.base import Provider
 from cot_redteam.providers.factory import ProviderFactory
+
+CostEstimator = Callable[[ModelRef, TokenUsage], Decimal | None]
 
 
 class InvocationRole(str, Enum):
@@ -321,3 +324,28 @@ class InvocationService:
     async def aclose(self) -> None:
         if self._owns_factory:
             await self.factory.aclose()
+
+
+async def invoke_provider(
+    provider: Provider,
+    *,
+    model: ModelRef,
+    request: GenerationRequest,
+    budget: BudgetTracker | None = None,
+    estimate_cost: CostEstimator | None = None,
+) -> ModelResponse:
+    """Budgeted logical invocation against an explicitly supplied provider.
+
+    Fallback path for plugin contexts constructed without an
+    ``InvocationService`` (older callers and direct-construction tests).
+    Records the logical request and tokens in ``budget`` when supplied; no
+    role ledger attribution is possible without a service. New code should
+    prefer ``InvocationService.invoke``.
+    """
+    if budget is not None:
+        await budget.reserve_request()
+    response = await provider.generate(model, request)
+    if budget is not None:
+        cost = estimate_cost(model, response.usage) if estimate_cost is not None else None
+        await budget.record_response(response.usage, estimated_cost=cost)
+    return response

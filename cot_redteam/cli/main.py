@@ -475,7 +475,9 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 async def _evolve_async(args: argparse.Namespace) -> int:
     from cot_redteam.attacks.generative.engine import GenerativeAttackEngine
+    from cot_redteam.core.invocation import InvocationService
     from cot_redteam.core.types import ModelRef
+    from cot_redteam.eval.budgets import BudgetTracker
     from cot_redteam.providers.factory import ProviderFactory
     from cot_redteam.storage.artifacts import ArtifactStore
 
@@ -501,6 +503,11 @@ async def _evolve_async(args: argparse.Namespace) -> int:
             max_generation_attempts=config.generative.max_generation_attempts,
             population_size=config.generative.population_size,
             fitness_weights=config.generative.fitness_weights,
+            invocation_service=InvocationService(
+                config,
+                provider_factory=factory,
+                budget=BudgetTracker(config.evaluation.budgets),
+            ),
         )
         result = await engine.evolve(
             config=config,
@@ -558,6 +565,8 @@ def cmd_race(args: argparse.Namespace) -> int:
 
 
 async def _race_async(args: argparse.Namespace) -> int:
+    from cot_redteam.core.invocation import InvocationService
+    from cot_redteam.eval.budgets import BudgetTracker
     from cot_redteam.eval.race import DEFAULT_RACE_PROMPT, format_race_table, run_race
     from cot_redteam.providers.factory import ProviderFactory
 
@@ -569,12 +578,18 @@ async def _race_async(args: argparse.Namespace) -> int:
     prompt = args.prompt or DEFAULT_RACE_PROMPT
     factory = ProviderFactory(config)
     try:
+        service = InvocationService(
+            config,
+            provider_factory=factory,
+            budget=BudgetTracker(config.evaluation.budgets),
+        )
         results = await run_race(
             config,
             models,
             prompt,
             attack_id=args.attack,
             factory=factory,
+            invocation_service=service,
             max_tokens=args.max_tokens,
         )
     finally:

@@ -20,6 +20,7 @@ from cot_redteam.benchmark.scoring import (
 )
 from cot_redteam.core.config import AppConfig
 from cot_redteam.core.errors import ConfigurationError
+from cot_redteam.core.invocation import InvocationService
 from cot_redteam.core.types import ModelRef, TokenUsage
 from cot_redteam.eval.budgets import BudgetTracker
 from cot_redteam.providers.factory import ProviderFactory
@@ -36,10 +37,17 @@ class BenchmarkEngine:
         config: AppConfig,
         factory: ProviderFactory,
         budget: BudgetTracker,
+        *,
+        invocation_service: InvocationService | None = None,
     ) -> None:
         self.config = config
         self.factory = factory
         self.budget = budget
+        self.invocation_service = invocation_service or InvocationService(
+            config,
+            provider_factory=factory,
+            budget=budget,
+        )
         self._global = asyncio.Semaphore(config.global_.concurrency)
         self._provider_semaphores: dict[str, asyncio.Semaphore] = {}
 
@@ -113,6 +121,7 @@ class BenchmarkEngine:
                             judge_model,
                             self.budget,
                             estimate_cost=self._estimate_cost,
+                            invocation_service=self.invocation_service,
                         )
                     )
         return tuple(results)
@@ -135,6 +144,7 @@ class BenchmarkEngine:
             transcript = await ConversationRunner(
                 self.budget,
                 estimate_cost=self._estimate_cost,
+                invocation_service=self.invocation_service,
             ).run(
                 trial,
                 provider,

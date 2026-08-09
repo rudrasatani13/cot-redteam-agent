@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from cot_redteam.attacks.base import BaseAttack, register_attack
 from cot_redteam.core.errors import ConfigurationError
+from cot_redteam.core.invocation import InvocationRole, InvocationService, invoke_provider
 from cot_redteam.core.types import (
     AttackAssessment,
     AttackPrompt,
@@ -197,9 +198,11 @@ class GenerativeAttackEngine:
         max_generation_attempts: int = 20,
         population_size: int = 5,
         fitness_weights: Mapping[str, float] | None = None,
+        invocation_service: InvocationService | None = None,
     ) -> None:
         self.provider = provider
         self.generator_model = generator_model
+        self.invocation_service = invocation_service
         self.max_generation_attempts = max_generation_attempts
         self.population_size = population_size
         weights = dict(fitness_weights or {"attack_success": 0.4, "evasion": 0.4, "novelty": 0.2})
@@ -228,7 +231,18 @@ class GenerativeAttackEngine:
                 max_tokens=800,
             )
             try:
-                response = await self.provider.generate(self.generator_model, request)
+                if self.invocation_service is not None:
+                    response = await self.invocation_service.invoke(
+                        model=self.generator_model,
+                        request=request,
+                        role=InvocationRole.GENERATOR,
+                    )
+                else:
+                    response = await invoke_provider(
+                        self.provider,
+                        model=self.generator_model,
+                        request=request,
+                    )
                 spec = parse_attack_spec(response.text)
                 candidates.append(
                     AttackCandidate(
