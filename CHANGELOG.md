@@ -50,7 +50,8 @@
 
 ### Security notes
 
-- Third-party plugins remain trusted in-process code and are not sandboxed.
+- Third-party plugins and custom Python target adapters remain trusted
+  in-process code and are not sandboxed.
 - Remote model calls are optional, user-funded, and budgeted; the release
   is fully provable offline with the `mock` provider plus scripted targets.
 

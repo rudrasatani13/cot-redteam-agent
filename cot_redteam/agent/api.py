@@ -65,57 +65,67 @@ async def run_agent_scenario(
     fixture_spec = support_fixture(scenario_id, fixture)
     settings = settings or AgentSecuritySettings()
     world = SupportAgentWorld(initial_state=fixture_spec.initial_state)
-    service = invocation_service or _default_invocation_service()
-    if settings.target == "provider_adapter":
-        if not settings.target_model:
-            raise ConfigurationError("agent target=provider_adapter requires target_model")
-        model_ref = ModelRef.parse(settings.target_model)
-        if model_ref.provider not in service.config.providers:
-            raise ConfigurationError(
-                f"agent target provider {model_ref.provider!r} is not configured; "
-                f"available: {', '.join(sorted(service.config.providers))}"
-            )
-        target: Target = ProviderTargetAdapter(
-            model=model_ref,
-            system_prompt=settings.system_prompt,
-            retain_final_response=settings.retention.retain_final_response,
-        )
-    else:
-        target = ScriptedTarget(
-            script=fixture_spec.script,
-            target_id="scripted",
-            target_version=fixture_spec.version,
-            retain_final_response=settings.retention.retain_final_response,
-        )
-    resolved_run_id = run_id or f"agent-{uuid.uuid4().hex[:12]}"
-    resolved_session_id = session_id or f"session-{uuid.uuid4().hex[:12]}"
-    if run_store is not None:
-        # Prior non-current RUNNING rows (crashed processes) become
-        # INTERRUPTED; never completed or secure.
-        run_store.recover_incomplete_agent_runs(exclude_run_id=resolved_run_id)
-    engine = AgentExecutionEngine(
-        scenario=scenario,
-        fixture=fixture_spec,
-        world=world,
-        target=target,
-        invocation_service=service,
-        # One budget tracker for both the engine and the invocation service:
-        # the run budget snapshot and the role ledger must agree.
-        budget=service.budget,
-        settings=settings,
-        progress=progress,
-        run_store=run_store,
-        manifest=manifest,
-    )
+    owns_invocation_service = invocation_service is None
+    service = _default_invocation_service() if invocation_service is None else invocation_service
+    target: Target | None = None
     try:
-        run = await engine.run(
+        if settings.target == "provider_adapter":
+            if not settings.target_model:
+                raise ConfigurationError("agent target=provider_adapter requires target_model")
+            model_ref = ModelRef.parse(settings.target_model)
+            if model_ref.provider not in service.config.providers:
+                raise ConfigurationError(
+                    f"agent target provider {model_ref.provider!r} is not configured; "
+                    f"available: {', '.join(sorted(service.config.providers))}"
+                )
+            target = ProviderTargetAdapter(
+                model=model_ref,
+                system_prompt=settings.system_prompt,
+                retain_final_response=settings.retention.retain_final_response,
+            )
+        else:
+            target = ScriptedTarget(
+                script=fixture_spec.script,
+                target_id="scripted",
+                target_version=fixture_spec.version,
+                retain_final_response=settings.retention.retain_final_response,
+            )
+        assert target is not None
+        resolved_run_id = run_id or f"agent-{uuid.uuid4().hex[:12]}"
+        resolved_session_id = session_id or f"session-{uuid.uuid4().hex[:12]}"
+        if run_store is not None:
+            # Prior non-current RUNNING rows (crashed processes) become
+            # INTERRUPTED; never completed or secure.
+            run_store.recover_incomplete_agent_runs(exclude_run_id=resolved_run_id)
+        engine = AgentExecutionEngine(
+            scenario=scenario,
+            fixture=fixture_spec,
+            world=world,
+            target=target,
+            invocation_service=service,
+            # One budget tracker for both the engine and the invocation service:
+            # the run budget snapshot and the role ledger must agree.
+            budget=service.budget,
+            settings=settings,
+            progress=progress,
+            run_store=run_store,
+            manifest=manifest,
+        )
+        return await engine.run(
             run_id=resolved_run_id,
             session_id=resolved_session_id,
             seed=seed,
         )
     finally:
-        await target.aclose()
-    return run
+        # Targets are always API-owned.  Invocation services follow normal
+        # dependency-injection ownership: only the service constructed here
+        # is closed; caller-provided services remain usable after the run.
+        try:
+            if target is not None:
+                await target.aclose()
+        finally:
+            if owns_invocation_service:
+                await service.aclose()
 
 
 def save_replay_artifact(
@@ -216,6 +226,13 @@ async def run_agent_scan(
                 if saved is not None:
                     replay_paths[run.run_id] = saved
     finally:
-        if owns_store:
-            store.close()
+        try:
+            if owns_store:
+                store.close()
+        finally:
+            # This service is constructed by the scan API and is shared by
+            # all scenario runs in the scan.  Individual runs receive it as
+            # a caller-owned dependency, so the scan closes it exactly once
+            # after the loop completes (including failure paths).
+            await service.aclose()
     return AgentScanResult(runs=tuple(runs), replay_paths=replay_paths)

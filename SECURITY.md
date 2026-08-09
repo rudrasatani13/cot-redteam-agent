@@ -44,10 +44,13 @@ Potentially hostile inputs include configuration files, datasets, generated
 attack specifications, provider responses, plugin metadata, report content,
 and filesystem paths derived from configuration.
 
-Third-party Python plugins execute in the host process and become trusted code
-once installed. LLM providers, local inference servers, operating systems,
-GitHub, and user-controlled deployment environments are external trust
-boundaries.
+Third-party Python plugins and custom agent target adapters execute in the host
+process and become trusted code once installed or supplied. The v0.6 runtime
+facades prevent accidental direct access to producer-owned evidence, but they
+are not a Python sandbox and do not contain deliberately malicious adapter
+code. Model output, tool-result content, LLM providers, local inference
+servers, operating systems, GitHub, and user-controlled deployment
+environments are external trust boundaries.
 
 ## Security invariants
 

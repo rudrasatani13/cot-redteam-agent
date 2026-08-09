@@ -57,6 +57,7 @@ from cot_redteam.core.types import (
     RunSummary,
     TokenUsage,
 )
+from cot_redteam.eval.manifest import validate_agent_manifest
 
 MIGRATIONS: list[tuple[int, str]] = [
     (
@@ -740,6 +741,17 @@ class SQLiteRunStore:
         data = json.loads(row["manifest_json"])
         return data if isinstance(data, dict) else None
 
+    def get_agent_manifest(self, run_id: str) -> dict[str, Any] | None:
+        """Load the redacted manifest attached to one agent run."""
+        row = self.connection.execute(
+            "SELECT manifest_json FROM agent_runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None or row["manifest_json"] is None:
+            return None
+        data = json.loads(row["manifest_json"])
+        return data if isinstance(data, dict) else None
+
     def close(self) -> None:
         if getattr(self, "_closed", False):
             return
@@ -839,20 +851,29 @@ class SQLiteRunStore:
         *,
         retention: AgentRetentionSettings,
     ) -> None:
-        """Insert (or replace) the run row as RUNNING before target execution.
+        """Insert one RUNNING row before target execution.
 
         ``retention`` is REQUIRED: the store is the last privacy boundary
         and sanitizes even when the caller claims the run is already
-        sanitized.
+        sanitized.  Run IDs are immutable storage identities; attempting to
+        begin an existing ID is rejected rather than deleting its trajectory
+        and evidence.
         """
         sanitizer = AgentSanitizer(retention)
         run = sanitizer.sanitize_run(run)
         if run.status is not AgentRunStatus.RUNNING:
             raise ValueError("begin_agent_run requires a RUNNING run")
+        if run.metadata.get("manifest") is not None:
+            raise ValueError("agent manifests may only be attached after finalization")
         conn = self.connection
         try:
             conn.execute("BEGIN")
-            conn.execute("DELETE FROM agent_runs WHERE run_id = ?", (run.run_id,))
+            existing = conn.execute(
+                "SELECT 1 FROM agent_runs WHERE run_id = ?",
+                (run.run_id,),
+            ).fetchone()
+            if existing is not None:
+                raise ValueError(f"agent run {run.run_id!r} already exists")
             conn.execute(
                 """
                 INSERT INTO agent_runs(
@@ -885,9 +906,7 @@ class SQLiteRunStore:
                     run.trajectory.digest if run.trajectory.events else None,
                     canonical_json(run.budget_snapshot),
                     canonical_json(run.metadata),
-                    canonical_json(run.metadata.get("manifest"))
-                    if run.metadata.get("manifest")
-                    else None,
+                    None,
                     run.error,
                 ),
             )
@@ -948,8 +967,10 @@ class SQLiteRunStore:
     ) -> None:
         """Replace oracle results for a run in one transaction."""
         conn = self.connection
+        owns_transaction = not conn.in_transaction
         try:
-            conn.execute("BEGIN")
+            if owns_transaction:
+                conn.execute("BEGIN")
             conn.execute("DELETE FROM agent_oracle_results WHERE run_id = ?", (run_id,))
             for result in results:
                 conn.execute(
@@ -966,21 +987,21 @@ class SQLiteRunStore:
                         canonical_json(result),
                     ),
                 )
-            conn.commit()
+            if owns_transaction:
+                conn.commit()
         except Exception:
-            conn.rollback()
+            if owns_transaction:
+                conn.rollback()
             raise
 
     def save_agent_findings(self, run_id: str, findings: Sequence[Finding]) -> None:
         """Replace findings for a run in one transaction."""
         conn = self.connection
+        owns_transaction = not conn.in_transaction
         try:
-            conn.execute("BEGIN")
-            conn.execute(
-                "DELETE FROM agent_findings WHERE finding_id IN "
-                "(SELECT finding_id FROM agent_findings WHERE run_id = ?)",
-                (run_id,),
-            )
+            if owns_transaction:
+                conn.execute("BEGIN")
+            conn.execute("DELETE FROM agent_findings WHERE run_id = ?", (run_id,))
             for finding in findings:
                 conn.execute(
                     """
@@ -997,9 +1018,11 @@ class SQLiteRunStore:
                         canonical_json(finding),
                     ),
                 )
-            conn.commit()
+            if owns_transaction:
+                conn.commit()
         except Exception:
-            conn.rollback()
+            if owns_transaction:
+                conn.rollback()
             raise
 
     def finalize_agent_run(
@@ -1012,22 +1035,127 @@ class SQLiteRunStore:
         """Finalize status/outcome/digests plus oracle results and findings.
 
         ``retention`` is REQUIRED: the run is sanitized again at this
-        storage boundary before any persistence (defense in depth).
+        storage boundary before any persistence (defense in depth).  The
+        final run row and all evidence tables commit atomically, and only a
+        RUNNING row may transition to a terminal result.
         """
         sanitizer = AgentSanitizer(retention)
         run = sanitizer.sanitize_run(run)
-        self.save_agent_oracle_results(run.run_id, run.oracle_results)
-        self.save_agent_findings(run.run_id, run.findings)
+        if run.status in (AgentRunStatus.RUNNING, AgentRunStatus.INTERRUPTED):
+            raise ValueError(f"cannot finalize agent run with status {run.status.value!r}")
         conn = self.connection
         try:
             conn.execute("BEGIN")
-            conn.execute(
+            row = conn.execute(
+                """
+                SELECT status, manifest_json, session_id,
+                       scenario_id, scenario_version,
+                       target_id, target_version,
+                       world_id, world_version,
+                       attack_id, attack_version,
+                       outcome, pre_snapshot_digest, post_snapshot_digest,
+                       trajectory_digest
+                FROM agent_runs WHERE run_id = ?
+                """,
+                (run.run_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"agent run {run.run_id!r} does not exist")
+            if row["status"] != AgentRunStatus.RUNNING.value:
+                raise ValueError(
+                    f"agent run {run.run_id!r} is already {row['status']!r}; "
+                    "only RUNNING rows may be finalized"
+                )
+
+            stored_refs = {
+                "session_id": row["session_id"],
+                "scenario": {
+                    "id": row["scenario_id"],
+                    "version": row["scenario_version"],
+                },
+                "target": {
+                    "id": row["target_id"],
+                    "version": row["target_version"],
+                },
+                "world": {
+                    "id": row["world_id"],
+                    "version": row["world_version"],
+                },
+                "attack": {
+                    "id": row["attack_id"],
+                    "version": row["attack_version"],
+                },
+            }
+            supplied_refs = {
+                "session_id": run.session_id,
+                "scenario": {
+                    "id": run.scenario_ref.id,
+                    "version": run.scenario_ref.version,
+                },
+                "target": {
+                    "id": run.target_ref.id,
+                    "version": run.target_ref.version,
+                },
+                "world": {
+                    "id": run.world_ref.id,
+                    "version": run.world_ref.version,
+                },
+                "attack": {
+                    "id": run.attack_ref.id,
+                    "version": run.attack_ref.version,
+                },
+            }
+            if supplied_refs != stored_refs:
+                raise ValueError("final agent run identity does not match the stored run")
+            for field, supplied in (
+                ("outcome", run.outcome.value if run.outcome else None),
+                ("pre_snapshot_digest", run.pre_snapshot_digest),
+                ("post_snapshot_digest", run.post_snapshot_digest),
+                ("trajectory_digest", run.original_trajectory_digest or run.trajectory.digest),
+            ):
+                stored = row[field]
+                if stored is not None and stored != supplied:
+                    raise ValueError(f"final agent run {field} does not match the stored run")
+
+            existing_manifest = row["manifest_json"]
+            expected_manifest = {
+                "run_id": run.run_id,
+                **stored_refs,
+                "status": run.status.value,
+                "outcome": run.outcome.value if run.outcome else None,
+                "pre_snapshot_digest": run.pre_snapshot_digest,
+                "post_snapshot_digest": run.post_snapshot_digest,
+                "trajectory_digest": run.original_trajectory_digest or run.trajectory.digest,
+            }
+            if manifest is not None:
+                validated_manifest = validate_agent_manifest(
+                    manifest,
+                    expected=expected_manifest,
+                )
+                if existing_manifest is not None:
+                    raise ValueError("agent manifest is already attached")
+                manifest_json: str | None = canonical_json(validated_manifest)
+            else:
+                if existing_manifest is None:
+                    manifest_json = None
+                else:
+                    try:
+                        existing_data = json.loads(existing_manifest)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError("stored agent manifest is invalid JSON") from exc
+                    validated_existing = validate_agent_manifest(
+                        existing_data,
+                        expected=expected_manifest,
+                    )
+                    manifest_json = canonical_json(validated_existing)
+
+            cursor = conn.execute(
                 """
                 UPDATE agent_runs SET
                     status = ?, outcome = ?, completed_at = ?,
                     pre_snapshot_digest = ?, post_snapshot_digest = ?,
                     trajectory_digest = ?, budget_json = ?, manifest_json = ?, error = ?
-                WHERE run_id = ?
+                WHERE run_id = ? AND status = ?
                 """,
                 (
                     run.status.value,
@@ -1040,19 +1168,103 @@ class SQLiteRunStore:
                     # describes the persisted events.
                     run.original_trajectory_digest or run.trajectory.digest,
                     canonical_json(run.budget_snapshot),
-                    canonical_json(manifest) if manifest is not None else None,
+                    manifest_json,
                     run.error,
                     run.run_id,
+                    AgentRunStatus.RUNNING.value,
                 ),
             )
+            if cursor.rowcount != 1:
+                raise ValueError(f"agent run {run.run_id!r} changed state before finalization")
+            # These methods detect the outer transaction and deliberately do
+            # not commit independently.  Any failure rolls back status,
+            # oracle rows, and finding rows together below.
+            self.save_agent_oracle_results(run.run_id, run.oracle_results)
+            self.save_agent_findings(run.run_id, run.findings)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    def update_agent_manifest(self, run_id: str, manifest: dict[str, Any]) -> None:
+        """Attach a manifest generated after an agent run is finalized.
+
+        Agent manifests include final run digests and therefore cannot be
+        constructed before target execution.  The update is kept as a small,
+        explicit transaction so CLI/API callers can persist the artifact
+        metadata without rewriting append-only trajectory events.
+        """
+        conn = self.connection
+        try:
+            conn.execute("BEGIN")
+            row = conn.execute(
+                """
+                SELECT run_id, session_id, status, outcome,
+                       scenario_id, scenario_version,
+                       target_id, target_version,
+                       world_id, world_version,
+                       attack_id, attack_version,
+                       pre_snapshot_digest, post_snapshot_digest, trajectory_digest,
+                       manifest_json
+                FROM agent_runs WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"agent run {run_id!r} does not exist")
+            if row["status"] == AgentRunStatus.RUNNING.value:
+                raise ValueError("cannot attach a manifest to a RUNNING agent run")
+            if row["manifest_json"] is not None:
+                raise ValueError("agent manifest is already attached")
+            validated_manifest = validate_agent_manifest(
+                manifest,
+                expected={
+                    "run_id": row["run_id"],
+                    "session_id": row["session_id"],
+                    "status": row["status"],
+                    "outcome": row["outcome"],
+                    "pre_snapshot_digest": row["pre_snapshot_digest"],
+                    "post_snapshot_digest": row["post_snapshot_digest"],
+                    "trajectory_digest": row["trajectory_digest"],
+                    "scenario": {
+                        "id": row["scenario_id"],
+                        "version": row["scenario_version"],
+                    },
+                    "target": {
+                        "id": row["target_id"],
+                        "version": row["target_version"],
+                    },
+                    "world": {
+                        "id": row["world_id"],
+                        "version": row["world_version"],
+                    },
+                    "attack": {
+                        "id": row["attack_id"],
+                        "version": row["attack_version"],
+                    },
+                },
+            )
+            cursor = conn.execute(
+                "UPDATE agent_runs SET manifest_json = ? "
+                "WHERE run_id = ? AND manifest_json IS NULL",
+                (canonical_json(validated_manifest), run_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"agent run {run_id!r} does not exist")
             conn.commit()
         except Exception:
             conn.rollback()
             raise
 
     def recover_incomplete_agent_runs(self, exclude_run_id: str | None = None) -> int:
-        """Mark prior non-current RUNNING rows as INTERRUPTED. Never marks
-        them completed or secure."""
+        """Mark prior non-current RUNNING rows as INTERRUPTED.
+
+        This operation is intentionally conservative about outcome (it never
+        marks a run completed or secure), but the v3 schema has no owner or
+        heartbeat column. Callers must serialize startup recovery per store;
+        concurrent workers sharing a database cannot be distinguished from a
+        crashed worker and may otherwise interrupt one another.
+        """
         params: tuple[Any, ...] = ()
         sql = "UPDATE agent_runs SET status = ? WHERE status = ?"
         if exclude_run_id is not None:
@@ -1178,10 +1390,46 @@ class SQLiteRunStore:
         trajectory_digest: str,
         metadata: Mapping[str, Any],
     ) -> None:
+        metadata_json = canonical_json(dict(metadata))
         conn = self.connection
         try:
             conn.execute("BEGIN")
-            conn.execute("DELETE FROM replay_artifacts WHERE replay_id = ?", (replay_id,))
+            existing = conn.execute(
+                """
+                SELECT original_run_id, schema_version, relative_path, sha256,
+                       byte_length, world_fixture_digest, trajectory_digest, metadata_json
+                FROM replay_artifacts WHERE replay_id = ?
+                """,
+                (replay_id,),
+            ).fetchone()
+            if existing is not None:
+                candidate = (
+                    original_run_id,
+                    schema_version,
+                    relative_path,
+                    sha256,
+                    byte_length,
+                    world_fixture_digest,
+                    trajectory_digest,
+                    metadata_json,
+                )
+                stored = tuple(
+                    existing[key]
+                    for key in (
+                        "original_run_id",
+                        "schema_version",
+                        "relative_path",
+                        "sha256",
+                        "byte_length",
+                        "world_fixture_digest",
+                        "trajectory_digest",
+                        "metadata_json",
+                    )
+                )
+                if stored != candidate:
+                    raise ValueError(f"replay record {replay_id!r} is immutable")
+                conn.commit()
+                return
             conn.execute(
                 """
                 INSERT INTO replay_artifacts(
@@ -1200,7 +1448,7 @@ class SQLiteRunStore:
                     world_fixture_digest,
                     trajectory_digest,
                     _dt(datetime.now(timezone.utc)),
-                    canonical_json(dict(metadata)),
+                    metadata_json,
                 ),
             )
             conn.commit()

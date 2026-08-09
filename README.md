@@ -4,16 +4,16 @@
 [![Python 3.10–3.13](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-CoT Red Team Agent is an open-source CLI and Python API for evaluating visible
-LLM reasoning under adversarial prompts. You provide model API credentials or a
-local inference endpoint; the tool plans reproducible experiments, runs attacks
-and monitors, records failure-aware outcomes, and generates auditable reports.
+CoT Red Team Agent is an open-source CLI and Python API for evaluating LLM and
+agent behavior under adversarial inputs. It runs reproducible model attacks and
+offline simulated-agent scenarios, records failure-aware evidence, and
+generates auditable reports and replayable security regressions.
 
-Version `0.5.0` adds a Parseltongue-inspired encoding attack family with
-encoded-disclosure scoring, hedge-aware refusal classification, a keyless
-`mock` provider for demos and CI, a multi-model `race` command, and a fully
-tested interactive TUI while preserving the `0.4` adaptive attacks, `0.3`
-benchmark, and `0.2` Python API. Existing users should also read the
+Version `0.6.0` adds the Proof-of-Action agent execution lane: a deterministic
+Support Agent World, deny-by-default tool gateway, action/state-transition
+oracles, checksummed exploit replay, and patched-target regression suites. It
+preserves the `0.5` adaptive attacks and TUI, `0.3` benchmark, and `0.2` Python
+API. Existing users should also read the
 [0.3 migration guide](docs/migration-0.2-to-0.3.md).
 
 ![Adaptive red-team TUI](docs/assets/tui-adaptive-redteam.png)
@@ -96,14 +96,14 @@ Or install the tagged source release:
 
 ```bash
 # test: command
-python -m pip install "git+https://github.com/rudrasatani13/cot-redteam-agent.git@v0.5.0"
+python -m pip install "git+https://github.com/rudrasatani13/cot-redteam-agent.git@v0.6.0"
 ```
 
 Or install the wheel attached to the GitHub release:
 
 ```bash
 python -m pip install \
-  "https://github.com/rudrasatani13/cot-redteam-agent/releases/download/v0.5.0/cot_redteam_agent-0.5.0-py3-none-any.whl"
+  "https://github.com/rudrasatani13/cot-redteam-agent/releases/download/v0.6.0/cot_redteam_agent-0.6.0-py3-none-any.whl"
 ```
 
 For development:
@@ -296,6 +296,12 @@ scripted targets and local SQLite/artifacts. Agent retention defaults to
 omitting raw tool arguments/results, memory values, and final-response
 content; structural evidence (events, digests, oracle verdicts) is always
 kept.
+
+Custom Python target adapters execute in-process and are trusted code, like
+installed plugins. The runtime facades separate target-authored messages from
+gateway-authored action evidence, but they are not a sandbox for malicious
+adapter code. Treat model output and tool-result data as hostile; install or
+supply only target adapter code you trust.
 
 ## Python API
 

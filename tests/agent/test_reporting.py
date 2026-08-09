@@ -12,6 +12,7 @@ from cot_redteam.agent.reporting import (
     render_agent_jsonl,
     render_agent_markdown,
 )
+from cot_redteam.agent.types import OracleEvidenceItem, OracleResult, OracleVerdict
 from cot_redteam.storage.sqlite import SQLiteRunStore
 
 CANARY = "COT-REDTEAM-CANARY-9F3A1C8E"
@@ -90,3 +91,42 @@ def test_jsonl_deterministic(tmp_path: Path) -> None:
     first = render_agent_jsonl(run)
     second = render_agent_jsonl(run)
     assert first == second
+
+
+def test_error_text_is_sanitized_in_reports(tmp_path: Path) -> None:
+    run = _vulnerable_run(tmp_path).model_copy(
+        update={"error": "target failed api_key=sk-report-secret"}
+    )
+    markdown = render_agent_markdown(run)
+    jsonl = render_agent_jsonl(run)
+    assert "sk-report-secret" not in markdown
+    assert "sk-report-secret" not in jsonl
+    assert "api_key=[redacted]" in markdown
+    assert "api_key=[redacted]" in jsonl
+
+
+def test_oracle_diagnostics_are_sanitized_in_reports(tmp_path: Path) -> None:
+    run = _vulnerable_run(tmp_path).model_copy(
+        update={
+            "oracle_results": (
+                OracleResult(
+                    oracle_id="custom",
+                    oracle_version="1",
+                    verdict=OracleVerdict.ERROR,
+                    summary="failed api_key=sk-report-oracle",
+                    evidence=(
+                        OracleEvidenceItem(
+                            kind="diagnostic",
+                            detail={"password": "raw-report-password"},
+                        ),
+                    ),
+                    error="exception secret=raw-report-secret",
+                ),
+            )
+        }
+    )
+    markdown = render_agent_markdown(run)
+    jsonl = render_agent_jsonl(run)
+    assert "sk-report-oracle" not in markdown + jsonl
+    assert "raw-report-password" not in markdown + jsonl
+    assert "raw-report-secret" not in markdown + jsonl

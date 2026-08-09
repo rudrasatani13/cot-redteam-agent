@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from cot_redteam.agent.config import AgentRetentionSettings
-from cot_redteam.agent.retention import AgentSanitizer
+from cot_redteam.agent.retention import AgentSanitizer, sanitize_error_text
 from cot_redteam.agent.types import (
     ActionEvent,
     AgentRun,
@@ -51,6 +51,9 @@ def render_agent_markdown(
     replay_checksum: str | None = None,
     retention: AgentRetentionSettings | None = None,
 ) -> str:
+    diagnostic_sanitizer = AgentSanitizer(retention or AgentRetentionSettings())
+    oracle_results = diagnostic_sanitizer.sanitize_oracle_result_collection(run.oracle_results)
+    findings = tuple(diagnostic_sanitizer.sanitize_finding(finding) for finding in run.findings)
     lines: list[str] = []
     lines.append(f"# Agent Security Run {run.run_id}")
     lines.append("")
@@ -63,7 +66,7 @@ def render_agent_markdown(
         f"- outcome: **{run.outcome.value if run.outcome else 'none'}**"
     )
     if run.error:
-        lines.append(f"- error: `{run.error}`")
+        lines.append(f"- error: `{sanitize_error_text(run.error)}`")
     lines.append("")
     lines.append("## World state digests")
     lines.append("")
@@ -77,7 +80,7 @@ def render_agent_markdown(
     lines.append("")
     lines.append("| oracle | version | verdict | evidence events |")
     lines.append("|---|---|---|---|")
-    for result in run.oracle_results:
+    for result in oracle_results:
         events = ", ".join(result.evidence_event_ids) or "-"
         lines.append(
             f"| {result.oracle_id} | {result.oracle_version} | {result.verdict.value} | {events} |"
@@ -85,8 +88,8 @@ def render_agent_markdown(
     lines.append("")
     lines.append("## Findings")
     lines.append("")
-    if run.findings:
-        for finding in run.findings:
+    if findings:
+        for finding in findings:
             lines.append(
                 f"- `{finding.severity}` {finding.category}: {finding.summary} "
                 f"(evidence: {', '.join(finding.evidence_event_ids) or '-'})"
@@ -143,7 +146,10 @@ def render_agent_jsonl(
     retention: AgentRetentionSettings | None = None,
 ) -> str:
     """One strict JSON record per run/event/oracle/finding."""
-    sanitizer = AgentSanitizer(retention) if retention is not None else None
+    diagnostic_sanitizer = AgentSanitizer(retention or AgentRetentionSettings())
+    event_sanitizer = AgentSanitizer(retention) if retention is not None else None
+    oracle_results = diagnostic_sanitizer.sanitize_oracle_result_collection(run.oracle_results)
+    findings = tuple(diagnostic_sanitizer.sanitize_finding(finding) for finding in run.findings)
     records: list[dict[str, object]] = []
     records.append(
         {
@@ -159,14 +165,14 @@ def render_agent_jsonl(
             "pre_snapshot_digest": run.pre_snapshot_digest,
             "post_snapshot_digest": run.post_snapshot_digest,
             "trajectory_digest": run.trajectory.digest,
-            "error": run.error,
+            "error": sanitize_error_text(run.error),
             "budget": run.budget_snapshot,
         }
     )
     for event in run.trajectory.events:
         envelope = event.model_dump(mode="python")
-        if sanitizer is not None:
-            envelope = sanitizer.sanitize_event(envelope)
+        if event_sanitizer is not None:
+            envelope = event_sanitizer.sanitize_event(envelope)
         records.append(
             {
                 "record_type": "agent_event",
@@ -175,7 +181,7 @@ def render_agent_jsonl(
                 "event": envelope,
             }
         )
-    for result in run.oracle_results:
+    for result in oracle_results:
         records.append(
             {
                 "record_type": "agent_oracle",
@@ -188,7 +194,7 @@ def render_agent_jsonl(
                 "evidence_event_ids": list(result.evidence_event_ids),
             }
         )
-    for finding in run.findings:
+    for finding in findings:
         records.append(
             {
                 "record_type": "agent_finding",

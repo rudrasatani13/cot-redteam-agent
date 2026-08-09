@@ -9,6 +9,7 @@ world/oracle/budget failures can never produce a clean security result.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,6 +17,7 @@ from cot_redteam.agent.config import AgentSecuritySettings
 from cot_redteam.agent.gateway import ToolGateway
 from cot_redteam.agent.oracles.base import OracleRunner
 from cot_redteam.agent.oracles.support import support_oracle
+from cot_redteam.agent.retention import AgentSanitizer, sanitize_error_text, world_canary_secrets
 from cot_redteam.agent.scenarios.support import (
     SupportScenario,
     SupportWorldFixture,
@@ -27,6 +29,7 @@ from cot_redteam.agent.target import (
 )
 from cot_redteam.agent.trajectory import TrajectoryRecorder
 from cot_redteam.agent.types import (
+    AgentEventUnion,
     AgentOutcome,
     AgentRun,
     AgentRunStatus,
@@ -61,7 +64,14 @@ class PolicyApprovalGate:
         session_id: str = "",
     ) -> None:
         self.approved_actions = frozenset(approved_actions)
-        self._recorder = recorder
+        self.__record_event: Callable[[AgentEventUnion], Awaitable[AgentEventUnion]] | None
+        if recorder is not None:
+            trusted_writer = recorder._trusted_writer()
+            self.__record_event = trusted_writer.record
+            self._agent_id = trusted_writer.agent_id
+        else:
+            self.__record_event = None
+            self._agent_id = ""
         self._run_id = run_id
         self._session_id = session_id
 
@@ -75,20 +85,20 @@ class PolicyApprovalGate:
         policy_version: str,
     ) -> bool:
         granted = subject_action in self.approved_actions
-        if self._recorder is not None:
+        if self.__record_event is not None:
             from cot_redteam.agent.types import (
                 ApprovalDecision,
                 ApprovalValue,
                 EventProvenance,
             )
 
-            await self._recorder.record(
+            await self.__record_event(
                 ApprovalDecision(
                     event_type="approval_decision",
                     run_id=self._run_id,
                     session_id=self._session_id,
                     event_id=f"gate-approval-{approval_id}",
-                    agent_id=self._recorder.agent_id,
+                    agent_id=self._agent_id,
                     provenance=EventProvenance(
                         source_kind="system",
                         source_id="approval_gate",
@@ -238,6 +248,16 @@ class AgentExecutionEngine:
                 missing.append(name)
         return tuple(missing)
 
+    def _sanitize_runtime_error(self, error: str | None) -> str | None:
+        try:
+            canaries = getattr(self.world, "canaries", {})
+        except Exception:  # noqa: BLE001 - sanitization must never mask the run error
+            canaries = {}
+        secrets = (
+            tuple(str(value) for value in canaries.values()) if hasattr(canaries, "values") else ()
+        )
+        return sanitize_error_text(error, secrets=secrets)
+
     async def run(
         self,
         *,
@@ -272,6 +292,7 @@ class AgentExecutionEngine:
                 budget_snapshot=_budget_snapshot(self.budget, self.invocation_service),
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
+                metadata={"seed": seed},
                 error=(
                     f"target {self.target.id!r} lacks required capabilities for "
                     f"scenario {self.scenario.id!r}: {', '.join(sorted(missing))}"
@@ -338,12 +359,47 @@ class AgentExecutionEngine:
         try:
             await self.target.run(request, runtime)
         except Exception as exc:  # noqa: BLE001 - honest partial/failed semantics
-            target_error = str(exc)[:500]
+            target_error = self._sanitize_runtime_error(str(exc)[:500])
         post = self.world.snapshot()
         trajectory = recorder.build_trajectory()
-        oracle_results = self._run_required_oracles(pre, post, trajectory)
+        oracle_results = AgentSanitizer(
+            retention_settings,
+            secrets=world_canary_secrets(pre, post),
+        ).sanitize_oracle_result_collection(self._run_required_oracles(pre, post, trajectory))
 
         outcome = aggregate_outcome(oracle_results)
+        persistence_error = recorder.persistence_error
+        if persistence_error is not None:
+            # A state mutation may have happened before its ActionEvent was
+            # durably appended.  Such a trajectory cannot prove an exploit:
+            # fail closed even if an oracle can infer impact from the world
+            # snapshot or a preceding event.  Convert every oracle result to
+            # ERROR and clear its evidence so persisted findings cannot carry
+            # a VERIFIED_EXPLOIT verdict or cite a non-durable event.
+            outcome = AgentOutcome.ERROR
+            persistence_message = (
+                self._sanitize_runtime_error(
+                    f"trajectory event persistence failed: {str(persistence_error)[:400]}"
+                )
+                or "trajectory event persistence failed"
+            )
+            oracle_results = tuple(
+                result.model_copy(
+                    update={
+                        "verdict": OracleVerdict.ERROR,
+                        "summary": "trajectory persistence failure invalidated oracle evidence",
+                        "evidence_event_ids": (),
+                        "evidence": (),
+                        "error": persistence_message,
+                    }
+                )
+                for result in oracle_results
+            )
+            target_error = self._sanitize_runtime_error(
+                f"{target_error}; {persistence_message}"
+                if target_error is not None
+                else persistence_message
+            )
         if target_error is not None and outcome is not AgentOutcome.VERIFIED_EXPLOIT:
             # A target failure cannot produce a clean result; keep proven
             # exploit evidence when an oracle can still prove it.
@@ -352,13 +408,14 @@ class AgentExecutionEngine:
         findings = self._build_findings(oracle_results, run_id=run_id)
 
         metadata: dict[str, Any] = {
+            "seed": seed,
             "retained": {
                 "final_response": retention_settings.retain_final_response,
                 "tool_arguments": retention_settings.retain_tool_arguments,
                 "tool_results": retention_settings.retain_tool_results,
                 "memory_values": retention_settings.retain_memory_values,
                 "world_values": retention_settings.retain_world_values,
-            }
+            },
         }
         run = AgentRun(
             run_id=run_id,
@@ -381,7 +438,7 @@ class AgentExecutionEngine:
             budget_snapshot=_budget_snapshot(self.budget, self.invocation_service),
             started_at=started_at,
             completed_at=datetime.now(timezone.utc),
-            error=target_error,
+            error=self._sanitize_runtime_error(target_error),
             metadata=metadata,
         )
         if store is not None:
