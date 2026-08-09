@@ -170,6 +170,19 @@ class AppConfig(StrictModel):
     storage: StorageSettings = Field(default_factory=StorageSettings)
     reporting: ReportingSettings = Field(default_factory=ReportingSettings)
     generative: GenerativeSettings = Field(default_factory=GenerativeSettings)
+    #: Optional v0.6 agent settings. Absent configs validate and run exactly
+    #: as before; the agent CLI requires this section or a dedicated agent
+    #: example config. Coerced to AgentSecuritySettings by the validator.
+    agent: Any | None = None
+
+    @model_validator(mode="after")
+    def _coerce_agent_settings(self) -> AppConfig:
+        if isinstance(self.agent, dict):
+            from cot_redteam.agent.config import AgentSecuritySettings
+
+            agent = AgentSecuritySettings.model_validate(self.agent)
+            return self.model_copy(update={"agent": agent})
+        return self
 
     @model_validator(mode="after")
     def _providers_non_empty(self) -> AppConfig:
@@ -307,6 +320,12 @@ def _resolve_runtime_paths(config: AppConfig, config_path: Path) -> AppConfig:
     reporting_dir = str(resolve_path_against_config(config.reporting.output_dir, config_path))
     archive = str(resolve_path_against_config(config.generative.archive_path, config_path))
     output_dir = str(resolve_path_against_config(config.global_.output_dir, config_path))
+    agent_settings = config.agent
+    if agent_settings is not None and getattr(agent_settings, "output_dir", None):
+        agent_output = str(
+            resolve_path_against_config(agent_settings.output_dir, config_path)  # type: ignore[attr-defined]
+        )
+        agent_settings = agent_settings.model_copy(update={"output_dir": agent_output})  # type: ignore[union-attr]
     return config.model_copy(
         update={
             "global_": config.global_.model_copy(update={"output_dir": output_dir}),
@@ -317,6 +336,7 @@ def _resolve_runtime_paths(config: AppConfig, config_path: Path) -> AppConfig:
             "artifacts": config.artifacts.model_copy(update={"root": artifacts_root}),
             "reporting": config.reporting.model_copy(update={"output_dir": reporting_dir}),
             "generative": config.generative.model_copy(update={"archive_path": archive}),
+            "agent": agent_settings,
         }
     )
 
