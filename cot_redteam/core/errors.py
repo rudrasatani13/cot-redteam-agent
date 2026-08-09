@@ -31,6 +31,10 @@ class BudgetExceededError(CotRedTeamError):
     """A configured run budget was exceeded."""
 
 
+class UnknownPricingError(CotRedTeamError):
+    """A cost ceiling is configured but a provider has unknown pricing."""
+
+
 class DatasetError(CotRedTeamError):
     """Malformed or incomplete dataset input."""
 

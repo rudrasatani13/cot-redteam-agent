@@ -67,3 +67,30 @@ async def test_elapsed_trip_at_reserve_does_not_phantom_count() -> None:
     snap = tracker.snapshot()
     assert snap.requests == 0
     assert snap.exceeded is True
+
+
+@pytest.mark.asyncio
+async def test_unknown_cost_does_not_inflate_estimate() -> None:
+    """A None (unknown) cost must never silently count as a real cost."""
+    from decimal import Decimal
+
+    tracker = BudgetTracker(BudgetSettings())
+    await tracker.reserve_request()
+    await tracker.record_response(TokenUsage(10, 20), estimated_cost=None)
+    assert tracker.snapshot().estimated_cost == Decimal("0")
+    await tracker.reserve_request()
+    await tracker.record_response(TokenUsage(10, 20), estimated_cost=Decimal("0.5"))
+    assert tracker.snapshot().estimated_cost == Decimal("0.5")
+
+
+@pytest.mark.asyncio
+async def test_explicit_zero_cost_is_an_estimate_not_unknown() -> None:
+    """Explicit zero pricing must be distinguishable from unknown pricing."""
+    from decimal import Decimal
+
+    tracker = BudgetTracker(BudgetSettings(max_estimated_cost=10.0))
+    await tracker.reserve_request()
+    await tracker.record_response(TokenUsage(100, 100), estimated_cost=Decimal("0"))
+    snap = tracker.snapshot()
+    assert snap.estimated_cost == Decimal("0")
+    assert snap.exceeded is False
