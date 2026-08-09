@@ -139,6 +139,10 @@ class ToolGateway:
                 policy_scope.principal == derived.principal
                 and policy_scope.resource == derived.resource
                 and policy_scope.action == derived.action
+                # Constraints are part of the authorization contract: a
+                # policy with constraints only authorizes operations whose
+                # derived constraints match exactly (deny-by-default).
+                and policy_scope.constraints == derived.constraints
             ):
                 return AuthorizationState.AUTHORIZED
         return AuthorizationState.UNAUTHORIZED
