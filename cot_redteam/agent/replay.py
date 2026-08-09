@@ -363,8 +363,9 @@ async def run_regression_suite(
             settings=settings,
             seed=seed,
         )
-        # Enforce the declared expectation: a mismatch is a failed
-        # regression, never a silent pass. suite.json uses enum NAMES
+        # Purely expectation-based: a mismatch is a failed regression, never
+        # a silent pass; a matched expectation passes regardless of the raw
+        # replay exit semantics. suite.json uses enum NAMES
         # (INVARIANT_HELD); outcomes expose values (invariant_held), so
         # compare case-insensitively against the enum name.
         expected = entry.expected_outcome.upper()
@@ -373,7 +374,14 @@ async def run_regression_suite(
             if result.run is not None and result.run.outcome is not None
             else None
         )
-        if actual is not None and actual != expected:
+        if actual is None:
+            result = ReplayResult(
+                status="inconclusive",
+                exit_code=EXIT_PARTIAL,
+                message=f"no outcome produced: {result.message}",
+                run=result.run,
+            )
+        elif actual != expected:
             result = ReplayResult(
                 status="regression_mismatch",
                 exit_code=EXIT_FAILED,
@@ -385,6 +393,13 @@ async def run_regression_suite(
                 status=result.status,
                 exit_code=EXIT_PARTIAL,
                 message=f"incomplete: {result.message}",
+                run=result.run,
+            )
+        else:
+            result = ReplayResult(
+                status="regression_matched",
+                exit_code=EXIT_OK,
+                message=f"expected {expected} confirmed ({result.message})",
                 run=result.run,
             )
         results.append((entry, result))

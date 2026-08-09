@@ -30,6 +30,7 @@ from cot_redteam.agent.types import (
     AgentOutcome,
     AgentRun,
     AgentRunStatus,
+    AgentTrajectory,
     Finding,
     OracleResult,
     OracleVerdict,
@@ -228,6 +229,15 @@ class AgentExecutionEngine:
             )
         return tuple(findings)
 
+    def _missing_required_capabilities(self) -> tuple[str, ...]:
+        """Capabilities the scenario needs that this target cannot perform."""
+        required = self.scenario.required_capabilities.model_dump()
+        missing: list[str] = []
+        for name, needed in required.items():
+            if needed and not getattr(self.target.capabilities, name, False):
+                missing.append(name)
+        return tuple(missing)
+
     async def run(
         self,
         *,
@@ -239,6 +249,42 @@ class AgentExecutionEngine:
         retention_settings = self.settings.retention
         store = self.run_store
         event_sink = None
+        missing = self._missing_required_capabilities()
+        if missing:
+            # A target that cannot exercise the scenario proves nothing:
+            # INCONCLUSIVE/PARTIAL, never INVARIANT_HELD.
+            pre = self.world.snapshot()
+            run = AgentRun(
+                run_id=run_id,
+                session_id=session_id,
+                scenario_ref=VersionedRef(id=self.scenario.id, version=self.scenario.version),
+                target_ref=VersionedRef(id=self.target.id, version=self.target.version),
+                world_ref=VersionedRef(id=self.world.world_id, version=self.world.world_version),
+                attack_ref=VersionedRef(
+                    id=f"scripted:{self.fixture.fixture}",
+                    version=self.fixture.version,
+                ),
+                status=AgentRunStatus.PARTIAL,
+                outcome=AgentOutcome.INCONCLUSIVE,
+                trajectory=AgentTrajectory(run_id=run_id, session_id=session_id, events=()),
+                pre_snapshot_digest=pre.digest,
+                post_snapshot_digest=pre.digest,
+                budget_snapshot=_budget_snapshot(self.budget, self.invocation_service),
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+                error=(
+                    f"target {self.target.id!r} lacks required capabilities for "
+                    f"scenario {self.scenario.id!r}: {', '.join(sorted(missing))}"
+                ),
+            )
+            if store is not None:
+                self._begin_run_row(run_id, session_id, started_at, store)
+                store.finalize_agent_run(  # type: ignore[attr-defined]
+                    run,
+                    retention=retention_settings,
+                    manifest=self.manifest,
+                )
+            return run
         if store is not None:
 
             def _sink(envelope: Any) -> None:

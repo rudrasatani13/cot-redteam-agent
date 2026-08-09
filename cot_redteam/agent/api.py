@@ -99,7 +99,9 @@ async def run_agent_scenario(
         world=world,
         target=target,
         invocation_service=service,
-        budget=BudgetTracker(settings.budgets),
+        # One budget tracker for both the engine and the invocation service:
+        # the run budget snapshot and the role ledger must agree.
+        budget=service.budget,
         settings=settings,
         progress=progress,
         run_store=run_store,

@@ -227,7 +227,7 @@ def test_regression_suite_aggregation(tmp_path: Path) -> None:
         report = await run_regression_suite(suite_dir)
         assert report.exit_code == 0  # patched target holds
         entry, result = report.entries[0]
-        assert result.status == "invariant_held"
+        assert result.status == "regression_matched"
 
     asyncio.run(_run())
 

@@ -306,12 +306,38 @@ def test_default_retention_omits_raw_sensitive_values_everywhere(tmp_path: Path)
             blob += (
                 "\n"
                 + store.connection.execute(
-                    "SELECT budget_json || ' ' || COALESCE(manifest_json, '') FROM agent_runs WHERE run_id = ?",
+                    "SELECT budget_json || ' ' || COALESCE(manifest_json, '') || ' ' "
+                    "|| COALESCE(error, '') FROM agent_runs WHERE run_id = ?",
                     (run.run_id,),
                 ).fetchone()[0]
             )
+            oracle_blob = "\n".join(
+                row[0]
+                for row in store.connection.execute(
+                    "SELECT result_json FROM agent_oracle_results WHERE run_id = ?",
+                    (run.run_id,),
+                )
+            )
+            findings_blob = "\n".join(
+                row[0]
+                for row in store.connection.execute(
+                    "SELECT finding_json FROM agent_findings WHERE run_id = ?",
+                    (run.run_id,),
+                )
+            )
+            replay_blob = "\n".join(
+                row[0]
+                for row in store.connection.execute(
+                    "SELECT metadata_json FROM replay_artifacts WHERE original_run_id = ?",
+                    (run.run_id,),
+                )
+            )
+            blob = "\n".join([blob, oracle_blob, findings_blob, replay_blob])
             assert CANARY not in blob
             assert "Forwarded the requested" not in blob
+            # Oracle proof carries only the canary hash, never the raw value.
+            assert "canary_sha256" in oracle_blob
+            assert CANARY not in oracle_blob
             # Tool arguments/results are structurally present as null under
             # default retention; the raw values never are.
             for event_json in blob.split("\n"):

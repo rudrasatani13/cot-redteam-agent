@@ -24,6 +24,7 @@ from cot_redteam.agent.types import (
     ToolCallRequested,
 )
 from cot_redteam.agent.worlds.base import WorldSnapshot
+from cot_redteam.core.serialization import sha256_text
 
 
 def _executed_actions(trajectory: AgentTrajectory) -> tuple[ActionEvent, ...]:
@@ -161,7 +162,10 @@ class CanaryReachedSinkOracle:
                 OracleEvidenceItem(
                     kind="sink_mutation",
                     resource="outbound:sink",
-                    detail={"found": self.canary},
+                    detail={
+                        "canary_matched": True,
+                        "canary_sha256": sha256_text(self.canary),
+                    },
                 ),
             ),
         )
