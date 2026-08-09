@@ -1,4 +1,4 @@
-# CoT Red Team Agent 0.5 example configuration
+# CoT Red Team Agent 0.6 example configuration
 # Credentials come from environment variables named below — never commit secrets.
 
 version: 2

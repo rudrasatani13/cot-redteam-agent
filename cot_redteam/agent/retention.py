@@ -14,6 +14,7 @@ replay writer, and the reporters.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import cast
 
@@ -23,17 +24,82 @@ from cot_redteam.agent.types import (
     AgentRun,
     AgentTrajectory,
     FinalResponse,
+    Finding,
     MemoryMutation,
+    OracleResult,
     ToolCallRequested,
     ToolResultReceived,
 )
 from cot_redteam.core.types import JsonValue
 from cot_redteam.eval.retention import redact_sensitive_values
 
+_ERROR_SECRET_RE = re.compile(
+    r"(?P<label>\b(?:authorization|proxy-authorization|api[_-]?key|apikey|"
+    r"access[_-]?token|refresh[_-]?token|secret|password|cookie|set-cookie|"
+    r"session|bearer)\b)(?P<separator>\s*[:=]\s*|\s+)(?P<value>[^\s,;]+)",
+    re.IGNORECASE,
+)
+
+
+def sanitize_error_text(error: str | None, *, secrets: tuple[str, ...] = ()) -> str | None:
+    """Redact known secrets and credential-like values from run errors."""
+    if error is None:
+        return None
+    redacted = str(redact_sensitive_values(error, secrets=secrets))
+    return _ERROR_SECRET_RE.sub(
+        lambda match: f"{match.group('label')}{match.group('separator')}[redacted]",
+        redacted,
+    )
+
+
+def world_canary_secrets(*snapshots: object) -> tuple[str, ...]:
+    """Extract synthetic world canaries for diagnostic redaction.
+
+    Only values under the explicit ``canaries`` state bucket are treated as
+    secrets.  Other world values may be proof-relevant identifiers and must
+    not be blanket-redacted.  Snapshots are accepted as generic objects so
+    this helper does not couple retention to a concrete world implementation.
+    """
+    values: list[str] = []
+    for snapshot in snapshots:
+        state = getattr(snapshot, "state", snapshot)
+        if not isinstance(state, Mapping):
+            continue
+        canaries = state.get("canaries")
+        if not isinstance(canaries, Mapping):
+            continue
+        for value in canaries.values():
+            if isinstance(value, str) and value and value not in values:
+                values.append(value)
+    return tuple(values)
+
+
+def _sanitize_diagnostic_value(value: JsonValue, *, secrets: tuple[str, ...]) -> JsonValue:
+    """Redact credential-like strings and configured canaries recursively."""
+    redacted = redact_sensitive_values(value, secrets=secrets)
+    if isinstance(redacted, str):
+        return sanitize_error_text(redacted, secrets=secrets)
+    if isinstance(redacted, Mapping):
+        return {
+            str(key): _sanitize_diagnostic_value(child, secrets=secrets)
+            for key, child in redacted.items()
+        }
+    if isinstance(redacted, list):
+        return [_sanitize_diagnostic_value(child, secrets=secrets) for child in redacted]
+    if isinstance(redacted, tuple):
+        return tuple(_sanitize_diagnostic_value(child, secrets=secrets) for child in redacted)
+    return redacted
+
 
 class AgentSanitizer:
-    def __init__(self, settings: AgentRetentionSettings) -> None:
+    def __init__(
+        self,
+        settings: AgentRetentionSettings,
+        *,
+        secrets: tuple[str, ...] = (),
+    ) -> None:
         self.settings = settings
+        self.secrets = secrets
 
     def sanitize_event(self, data: Mapping[str, object]) -> dict[str, object]:
         """Sanitize one event envelope before persistence/reporting.
@@ -80,6 +146,46 @@ class AgentSanitizer:
             return {"redacted": True}
         return cast(JsonValue, redact_sensitive_values(result))
 
+    def sanitize_oracle_result(self, result: OracleResult) -> OracleResult:
+        """Sanitize oracle diagnostics before persistence or reporting.
+
+        Verdicts, IDs, digests, and event references are structural proof
+        fields. Human-readable diagnostics and evidence details are treated as
+        untrusted and redacted for credential-like values and world canaries.
+        """
+        evidence = tuple(
+            item.model_copy(
+                update={
+                    "kind": sanitize_error_text(item.kind, secrets=self.secrets) or "",
+                    "resource": sanitize_error_text(item.resource, secrets=self.secrets),
+                    "detail": _sanitize_diagnostic_value(item.detail, secrets=self.secrets),
+                }
+            )
+            for item in result.evidence
+        )
+        return result.model_copy(
+            update={
+                "summary": sanitize_error_text(result.summary, secrets=self.secrets) or "",
+                "evidence": evidence,
+                "error": sanitize_error_text(result.error, secrets=self.secrets),
+            }
+        )
+
+    def sanitize_oracle_result_collection(
+        self, results: tuple[OracleResult, ...]
+    ) -> tuple[OracleResult, ...]:
+        """Sanitize a complete oracle result collection deterministically."""
+        return tuple(self.sanitize_oracle_result(result) for result in results)
+
+    def sanitize_finding(self, finding: Finding) -> Finding:
+        """Sanitize finding diagnostics derived from oracle output."""
+        return finding.model_copy(
+            update={
+                "category": sanitize_error_text(finding.category, secrets=self.secrets) or "",
+                "summary": sanitize_error_text(finding.summary, secrets=self.secrets) or "",
+            }
+        )
+
     def sanitize_world_state(self, state: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
         """World values are proof-irrelevant after the oracle has run; the
         digests are the evidence."""
@@ -122,6 +228,11 @@ class AgentSanitizer:
                 "trajectory": self.sanitize_trajectory(run.trajectory),
                 "original_trajectory_digest": run.original_trajectory_digest
                 or run.trajectory.digest,
+                "error": sanitize_error_text(run.error, secrets=self.secrets),
+                "oracle_results": tuple(
+                    self.sanitize_oracle_result(result) for result in run.oracle_results
+                ),
+                "findings": tuple(self.sanitize_finding(finding) for finding in run.findings),
             }
         )
 

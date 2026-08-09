@@ -14,6 +14,7 @@ from cot_redteam.agent.replay import (
     ReplayArtifactV1,
     ReplayError,
     ReplayResult,
+    build_replay_artifact,
     compute_payload_digest,
     load_regression_suite,
     load_replay,
@@ -23,6 +24,20 @@ from cot_redteam.agent.replay import (
 from cot_redteam.agent.scenarios.support import support_fixture
 from cot_redteam.storage.artifacts import ArtifactStore
 from cot_redteam.storage.sqlite import SQLiteRunStore
+
+CHECKED_IN_ARTIFACT = Path("tests/fixtures/security_regressions/exploit-indirect-injection.json")
+
+
+def _checked_in_artifact() -> ReplayArtifactV1:
+    return load_replay(CHECKED_IN_ARTIFACT)
+
+
+def _mutate_artifact(artifact: ReplayArtifactV1, **updates: object) -> ReplayArtifactV1:
+    data = artifact.model_dump(mode="python")
+    for field, value in updates.items():
+        data[field] = value
+    data["checksums"]["payload_sha256"] = compute_payload_digest(data)
+    return ReplayArtifactV1.model_validate(data)
 
 
 async def _save_exploit(tmp_path: Path) -> tuple[Path, str]:
@@ -81,6 +96,297 @@ def test_exact_replay_reproduces_exploit(tmp_path: Path) -> None:
     assert result.exit_code == 1
 
 
+def test_exact_replay_rejects_oracle_drift_with_matching_trajectory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A matching trajectory cannot hide changed oracle verdict/evidence."""
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    artifact = load_replay(path)
+    import cot_redteam.agent.api as agent_api
+    from cot_redteam.agent.types import OracleVerdict
+
+    original = agent_api.run_agent_scenario
+
+    async def changed_oracle(**kwargs: object):
+        run = await original(**kwargs)  # type: ignore[arg-type]
+        first = run.oracle_results[0].model_copy(
+            update={
+                "verdict": OracleVerdict.INVARIANT_HELD,
+                "summary": "oracle result changed without a trajectory change",
+                "evidence_event_ids": ("gw-call-0-action",),
+            }
+        )
+        return run.model_copy(update={"oracle_results": (first, *run.oracle_results[1:])})
+
+    monkeypatch.setattr(agent_api, "run_agent_scenario", changed_oracle)
+    result = asyncio.run(run_replay(artifact))
+
+    assert result.status == "inconclusive"
+    assert result.exit_code == 3
+    assert "oracle" in result.message
+
+
+def test_exact_replay_does_not_map_matching_trajectory_invariant_to_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checked legacy artifact with changed outcome is never exit 0."""
+    artifact = _checked_in_artifact()
+    import cot_redteam.agent.api as agent_api
+    from cot_redteam.agent.types import AgentOutcome
+
+    original = agent_api.run_agent_scenario
+
+    async def changed_outcome(**kwargs: object):
+        run = await original(**kwargs)  # type: ignore[arg-type]
+        return run.model_copy(update={"outcome": AgentOutcome.INVARIANT_HELD})
+
+    monkeypatch.setattr(agent_api, "run_agent_scenario", changed_outcome)
+    result = asyncio.run(run_replay(artifact))
+
+    assert result.status == "inconclusive"
+    assert result.exit_code == 3
+
+
+def test_exact_replay_requires_verified_original_outcome() -> None:
+    artifact = _mutate_artifact(_checked_in_artifact(), original_outcome="invariant_held")
+
+    with pytest.raises(ReplayError, match="original_outcome"):
+        asyncio.run(run_replay(artifact))
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        {
+            "id": "scripted",
+            "original_version": "1",
+            "family": "vulnerable",
+            "unexpected": "field",
+        },
+        {"id": "scripted", "original_version": "1"},
+        {"id": " ", "original_version": "1", "family": "vulnerable"},
+    ],
+)
+def test_replay_rejects_noncanonical_target_mapping(target: dict[str, str]) -> None:
+    artifact = _mutate_artifact(_checked_in_artifact(), target=target)
+
+    with pytest.raises(ReplayError, match="target metadata"):
+        asyncio.run(run_replay(artifact))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("world_fixture_digest", "A" * 64),
+        ("world_fixture_digest", "0" * 63),
+        ("trajectory_digest", "B" * 64),
+        ("trajectory_digest", "0" * 65),
+        ("oracle_results_digest", "C" * 64),
+        ("oracle_results_digest", "0" * 65),
+    ],
+)
+def test_replay_rejects_noncanonical_digests(field: str, value: str) -> None:
+    artifact = _mutate_artifact(_checked_in_artifact(), **{field: value})
+
+    with pytest.raises(ReplayError, match=field):
+        asyncio.run(run_replay(artifact))
+
+
+def test_exact_replay_applies_recorded_budgets_when_settings_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _mutate_artifact(
+        _checked_in_artifact(),
+        budget_configuration={
+            "max_requests": 1,
+            "max_input_tokens": None,
+            "max_output_tokens": None,
+            "max_elapsed_seconds": None,
+            "max_estimated_cost": None,
+        },
+    )
+    import cot_redteam.agent.api as agent_api
+
+    original = agent_api.run_agent_scenario
+    seen: dict[str, AgentSecuritySettings | None] = {}
+
+    async def capture(**kwargs: object):
+        seen["settings"] = kwargs.get("settings")  # type: ignore[assignment]
+        return await original(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(agent_api, "run_agent_scenario", capture)
+    asyncio.run(run_replay(artifact))
+
+    assert seen["settings"] is not None
+    assert seen["settings"].budgets.max_requests == 1  # type: ignore[union-attr]
+
+
+def test_exact_replay_rejects_different_caller_budgets() -> None:
+    artifact = _mutate_artifact(
+        _checked_in_artifact(),
+        budget_configuration={
+            "max_requests": 1,
+            "max_input_tokens": None,
+            "max_output_tokens": None,
+            "max_elapsed_seconds": None,
+            "max_estimated_cost": None,
+        },
+    )
+
+    with pytest.raises(ReplayError, match="budget_configuration"):
+        asyncio.run(run_replay(artifact, settings=AgentSecuritySettings()))
+
+
+def test_regression_override_uses_caller_budgets() -> None:
+    artifact = _mutate_artifact(
+        _checked_in_artifact(),
+        budget_configuration={
+            "max_requests": 1,
+            "max_input_tokens": None,
+            "max_output_tokens": None,
+            "max_elapsed_seconds": None,
+            "max_estimated_cost": None,
+        },
+    )
+
+    result = asyncio.run(run_replay(artifact, fixture="patched"))
+    assert result.run is not None
+    assert result.run.outcome is not None
+
+
+def test_replay_rejects_non_strict_budget_values() -> None:
+    artifact = _mutate_artifact(
+        _checked_in_artifact(),
+        budget_configuration={"max_requests": "1"},
+    )
+
+    with pytest.raises(ReplayError, match="budget_configuration"):
+        asyncio.run(run_replay(artifact))
+
+
+def test_exact_replay_uses_embedded_seed_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = _mutate_artifact(
+        _checked_in_artifact(),
+        sanitized_inputs={"seed": 7},
+    )
+    import cot_redteam.agent.api as agent_api
+
+    original = agent_api.run_agent_scenario
+    seen: dict[str, int] = {}
+
+    async def capture(**kwargs: object):
+        seen["seed"] = kwargs["seed"]  # type: ignore[assignment]
+        return await original(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(agent_api, "run_agent_scenario", capture)
+    asyncio.run(run_replay(artifact))
+
+    assert seen["seed"] == 7
+
+
+def test_exact_replay_rejects_nonmatching_seed_override() -> None:
+    artifact = _mutate_artifact(
+        _checked_in_artifact(),
+        sanitized_inputs={"seed": 7},
+    )
+
+    with pytest.raises(ReplayError, match="exact replay seed"):
+        asyncio.run(run_replay(artifact, seed=42))
+
+
+def test_replay_rejects_non_integer_embedded_seed() -> None:
+    artifact = _mutate_artifact(
+        _checked_in_artifact(),
+        sanitized_inputs={"seed": "7"},
+    )
+
+    with pytest.raises(ReplayError, match="replay seed"):
+        asyncio.run(run_replay(artifact))
+
+
+def test_build_replay_artifact_records_validated_seed() -> None:
+    async def _run():
+        return await run_agent_scenario(
+            scenario_id="support.indirect_prompt_injection.v1",
+            fixture="vulnerable",
+            seed=7,
+        )
+
+    run = asyncio.run(_run())
+    run_with_seed = run.model_copy(update={"metadata": {"seed": 7}})
+    artifact = build_replay_artifact(
+        run_with_seed,
+        fixture=support_fixture("support.indirect_prompt_injection.v1", "vulnerable"),
+        budget_configuration=AgentSecuritySettings().budgets.model_dump(mode="python"),
+    )
+    assert artifact["sanitized_inputs"] == {"seed": 7}
+
+
+def test_build_replay_artifact_rejects_invalid_seed() -> None:
+    async def _run():
+        return await run_agent_scenario(
+            scenario_id="support.indirect_prompt_injection.v1",
+            fixture="vulnerable",
+            seed=7,
+        )
+
+    run = asyncio.run(_run())
+    run_with_seed = run.model_copy(update={"metadata": {"seed": "7"}})
+    with pytest.raises(ReplayError, match="replay seed"):
+        build_replay_artifact(
+            run_with_seed,
+            fixture=support_fixture("support.indirect_prompt_injection.v1", "vulnerable"),
+            budget_configuration=AgentSecuritySettings().budgets.model_dump(mode="python"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            "scenario",
+            {"id": "support.indirect_prompt_injection.v1", "version": "99"},
+            "scenario",
+        ),
+        ("attack", {"id": "scripted:vulnerable", "version": "99"}, "attack"),
+        (
+            "target",
+            {"id": "scripted", "original_version": "99", "family": "vulnerable"},
+            "target",
+        ),
+        (
+            "oracles",
+            [
+                {"id": "canary_reached_sink", "version": "99"},
+                {"id": "unauthorized_tool_call", "version": "1"},
+            ],
+            "oracle",
+        ),
+        ("package", {"cot-redteam-agent": "99.0.0"}, "package"),
+        ("source", {"revision": "0" * 40, "dirty": False}, "source"),
+    ],
+)
+def test_exact_replay_rejects_incompatible_contracts(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    """A valid checksum does not make incompatible replay metadata usable."""
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    original = load_replay(path)
+    data = original.model_dump(mode="python")
+    data[field] = value
+    data["checksums"]["payload_sha256"] = compute_payload_digest(data)
+    artifact = ReplayArtifactV1.model_validate(data)
+
+    with pytest.raises(ReplayError, match=message):
+        asyncio.run(run_replay(artifact))
+
+
 def test_patched_regression_holds(tmp_path: Path) -> None:
     path, _ = asyncio.run(_save_exploit(tmp_path))
     artifact = load_replay(path)
@@ -91,6 +397,159 @@ def test_patched_regression_holds(tmp_path: Path) -> None:
     result = asyncio.run(_replay())
     assert result.status == "invariant_held"
     assert result.exit_code == 0
+
+
+def test_target_override_does_not_waive_original_fixture_contract(
+    tmp_path: Path,
+) -> None:
+    """Regression target overrides still verify the saved world fixture."""
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    original = load_replay(path)
+    data = original.model_dump(mode="python")
+    data["world_fixture_digest"] = "0" * 64
+    data["checksums"]["payload_sha256"] = compute_payload_digest(data)
+    artifact = ReplayArtifactV1.model_validate(data)
+
+    with pytest.raises(ReplayError, match="world fixture digest"):
+        asyncio.run(run_replay(artifact, fixture="patched"))
+
+
+def test_target_override_allows_provenance_drift(tmp_path: Path) -> None:
+    """Regression artifacts remain usable after package/source updates."""
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    original = load_replay(path)
+    data = original.model_dump(mode="python")
+    data["package"] = {"cot-redteam-agent": "99.0.0"}
+    data["source"] = {"revision": "0" * 40, "dirty": False}
+    data["checksums"]["payload_sha256"] = compute_payload_digest(data)
+    artifact = ReplayArtifactV1.model_validate(data)
+
+    result = asyncio.run(run_replay(artifact, fixture="patched"))
+    assert result.status == "invariant_held"
+    assert result.exit_code == 0
+
+
+def test_target_override_does_not_waive_package_contract_id(
+    tmp_path: Path,
+) -> None:
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    original = load_replay(path)
+    data = original.model_dump(mode="python")
+    data["package"] = {"unrelated-package": "99.0.0"}
+    data["checksums"]["payload_sha256"] = compute_payload_digest(data)
+    artifact = ReplayArtifactV1.model_validate(data)
+
+    with pytest.raises(ReplayError, match="package contract IDs"):
+        asyncio.run(run_replay(artifact, fixture="patched"))
+
+
+def test_exact_replay_allows_source_unavailable_on_both_sides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clean wheels outside Git can replay when both provenance records are null."""
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    original = load_replay(path)
+    data = original.model_dump(mode="python")
+    data["source"] = {"revision": None, "dirty": None}
+    data["checksums"]["payload_sha256"] = compute_payload_digest(data)
+    artifact = ReplayArtifactV1.model_validate(data)
+    monkeypatch.setattr(
+        "cot_redteam.agent.replay._git_source",
+        lambda: {"revision": None, "dirty": None},
+    )
+
+    result = asyncio.run(run_replay(artifact))
+    assert result.status == "exploit_reproduced"
+    assert result.exit_code == 1
+
+
+def test_exact_replay_allows_known_artifact_with_runtime_source_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wheel runtime may lack Git while the saved artifact has provenance."""
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    artifact = load_replay(path)
+    monkeypatch.setattr(
+        "cot_redteam.agent.replay._git_source",
+        lambda: {"revision": None, "dirty": None},
+    )
+
+    result = asyncio.run(run_replay(artifact))
+    assert result.status == "exploit_reproduced"
+    assert result.exit_code == 1
+
+
+def test_exact_replay_rejects_missing_artifact_source_when_runtime_is_known(
+    tmp_path: Path,
+) -> None:
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    original = load_replay(path)
+    data = original.model_dump(mode="python")
+    data["source"] = {"revision": None, "dirty": None}
+    data["checksums"]["payload_sha256"] = compute_payload_digest(data)
+    artifact = ReplayArtifactV1.model_validate(data)
+
+    with pytest.raises(ReplayError, match="artifact provenance unavailable"):
+        asyncio.run(run_replay(artifact))
+
+
+def test_exact_replay_rejects_malformed_artifact_source(tmp_path: Path) -> None:
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    original = load_replay(path)
+    data = original.model_dump(mode="python")
+    data["source"] = {"revision": None, "dirty": False}
+    data["checksums"]["payload_sha256"] = compute_payload_digest(data)
+    artifact = ReplayArtifactV1.model_validate(data)
+
+    with pytest.raises(ReplayError, match="invalid artifact provenance"):
+        asyncio.run(run_replay(artifact))
+
+
+def test_exact_replay_accepts_ancestor_source_revision(tmp_path: Path) -> None:
+    """Compatible commits retain exact replay; trajectory digest remains authoritative."""
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    original = load_replay(path)
+    data = original.model_dump(mode="python")
+    data["source"] = {
+        "revision": "a28db61975887ebced8c8caad38b02298f786c2f",
+        "dirty": False,
+    }
+    data["checksums"]["payload_sha256"] = compute_payload_digest(data)
+    artifact = ReplayArtifactV1.model_validate(data)
+
+    result = asyncio.run(run_replay(artifact))
+    assert result.status == "exploit_reproduced"
+    assert result.exit_code == 1
+
+
+def test_exact_replay_rejects_unrelated_source_revision(tmp_path: Path) -> None:
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    original = load_replay(path)
+    data = original.model_dump(mode="python")
+    data["source"] = {"revision": "0" * 40, "dirty": False}
+    data["checksums"]["payload_sha256"] = compute_payload_digest(data)
+    artifact = ReplayArtifactV1.model_validate(data)
+
+    with pytest.raises(ReplayError, match="not an ancestor"):
+        asyncio.run(run_replay(artifact))
+
+
+def test_exact_replay_ignores_dirty_marker_drift(tmp_path: Path) -> None:
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    original = load_replay(path)
+    data = original.model_dump(mode="python")
+    data["source"] = {
+        "revision": original.source["revision"],
+        "dirty": not bool(original.source["dirty"]),
+    }
+    data["checksums"]["payload_sha256"] = compute_payload_digest(data)
+    artifact = ReplayArtifactV1.model_validate(data)
+
+    result = asyncio.run(run_replay(artifact))
+    assert result.status == "exploit_reproduced"
+    assert result.exit_code == 1
 
 
 def test_clean_regression_holds(tmp_path: Path) -> None:

@@ -31,7 +31,9 @@ class FakeGateway:
     ToolCallRequested / ToolResultReceived events into the trajectory."""
 
     def __init__(self, recorder) -> None:
-        self.recorder = recorder
+        # The fake gateway models a trusted producer and therefore uses the
+        # recorder's private capability-bearing writer.
+        self.recorder = recorder._trusted_writer()
         self.calls: list[tuple[str, dict]] = []
 
     async def execute(self, *, call_id, tool_name, arguments, requested_authorization=()):
@@ -149,18 +151,37 @@ def _request() -> AgentTargetRequest:
 
 
 def _runtime(
-    *, gateway=None, approvals=None, invocation=None, agent_id: str = "scripted"
-) -> TargetRuntime:
+    *,
+    gateway=None,
+    approvals=None,
+    invocation=None,
+    agent_id: str = "scripted",
+    with_recorder: bool = False,
+    with_gateway: bool = False,
+) -> (
+    TargetRuntime
+    | tuple[TargetRuntime, TrajectoryRecorder]
+    | tuple[TargetRuntime, object]
+    | tuple[TargetRuntime, TrajectoryRecorder, object]
+):
     recorder = TrajectoryRecorder(run_id="run-1", session_id="session-1", agent_id=agent_id)
-    return TargetRuntime(
+    gateway_instance = gateway or FakeGateway(recorder)
+    runtime = TargetRuntime(
         run_id="run-1",
         session_id="session-1",
         invocation_service=invocation or FakeInvocationService(),
-        tool_gateway=gateway or FakeGateway(recorder),
+        tool_gateway=gateway_instance,
         trajectory=recorder,
         approvals=approvals or FakeApprovals(),
         budget=BudgetTracker(BudgetSettings()),
     )
+    if with_recorder and with_gateway:
+        return runtime, recorder, gateway_instance
+    if with_recorder:
+        return runtime, recorder
+    if with_gateway:
+        return runtime, gateway_instance
+    return runtime
 
 
 def test_scripted_target_capabilities() -> None:
@@ -182,8 +203,7 @@ async def test_scripted_target_executes_script_and_closes() -> None:
             ScriptedFinalResponse(text="I resolved T-42."),
         )
     )
-    runtime = _runtime()
-    gateway = runtime.tool_gateway
+    runtime, gateway = _runtime(with_gateway=True)
     result = await target.run(_request(), runtime)
     assert isinstance(result, FinalResponseData)
     assert result.text_retained is True
@@ -199,8 +219,11 @@ async def test_scripted_target_executes_script_and_closes() -> None:
 
 @pytest.mark.asyncio
 async def test_scripted_target_denied_approval_skips_tool() -> None:
-    runtime = _runtime()
-    runtime.approvals = FakeApprovals(granted=False, recorder=runtime.trajectory)
+    runtime, recorder, gateway = _runtime(with_recorder=True, with_gateway=True)
+    # The fake approval gate is a trusted producer in this unit test; target
+    # code itself receives only the restricted trajectory facade.
+    fake_approvals = FakeApprovals(granted=False, recorder=recorder._trusted_writer())
+    runtime.approvals = fake_approvals
     target = ScriptedTarget(
         script=(
             ScriptedToolCall(
@@ -211,14 +234,13 @@ async def test_scripted_target_denied_approval_skips_tool() -> None:
             ScriptedFinalResponse(text="done"),
         )
     )
-    gateway = runtime.tool_gateway
     await target.run(_request(), runtime)
     assert gateway.calls == []  # tool never executed
     trajectory = runtime.trajectory.build_trajectory()
     kinds = [event.event_type for event in trajectory.events]
     assert "approval_decision" in kinds
     assert "tool_call_requested" not in kinds
-    assert runtime.approvals.requests == ["approval-0"]
+    assert fake_approvals.requests == ["approval-0"]
 
 
 @pytest.mark.asyncio

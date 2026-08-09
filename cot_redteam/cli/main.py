@@ -657,7 +657,8 @@ async def _agent_scan_async(args: argparse.Namespace) -> int:
     from cot_redteam.agent.reporting import render_agent_jsonl, render_agent_markdown
     from cot_redteam.agent.scenarios.support import SUPPORT_SCENARIOS
     from cot_redteam.agent.types import AgentOutcome
-    from cot_redteam.eval.manifest import build_agent_manifest
+    from cot_redteam.core.serialization import sha256_file
+    from cot_redteam.eval.manifest import ArtifactRecord, build_agent_manifest
     from cot_redteam.storage.artifacts import ArtifactStore
 
     config = load_config(args.config)
@@ -679,34 +680,88 @@ async def _agent_scan_async(args: argparse.Namespace) -> int:
 
     result = await run_agent_scan(config)
     artifact_store = ArtifactStore(config.artifacts.root)
+    # ``run_agent_scan`` owns and closes its default SQLite store before
+    # returning.  Manifests need the completed run and are therefore built
+    # here; reopen the same store to attach each manifest transactionally.
+    manifest_store = SQLiteRunStore(config.storage.path)
     output_dir = Path(settings.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    for run in result.runs:
-        manifest = build_agent_manifest(run, config=config)
-        markdown = render_agent_markdown(
-            run,
-            replay_path=(
-                result.replay_paths[run.run_id][0] if run.run_id in result.replay_paths else None
-            ),
-            replay_checksum=(
-                result.replay_paths[run.run_id][1] if run.run_id in result.replay_paths else None
-            ),
-            retention=settings.retention,
-        )
-        (output_dir / f"{run.run_id}.md").write_text(markdown, encoding="utf-8")
-        (output_dir / f"{run.run_id}.jsonl").write_text(
-            render_agent_jsonl(run, retention=settings.retention),
-            encoding="utf-8",
-        )
-        artifact_store.write_text(
-            f"{run.run_id}/manifest.json",
-            json.dumps(manifest, indent=2, sort_keys=True),
-            media_type="application/json",
-        )
-        replay = result.replay_paths.get(run.run_id)
-        replay_note = f" replay={replay[0]}" if replay else ""
-        outcome = run.outcome.value if run.outcome else "none"
-        print(f"{run.scenario_ref.id}\t{run.attack_ref.id}\t{outcome}\t{run.run_id}{replay_note}")
+    try:
+        for run in result.runs:
+            artifact_records: list[ArtifactRecord] = []
+            replay = result.replay_paths.get(run.run_id)
+            if replay is not None:
+                replay_path = Path(replay[0]).resolve()
+                try:
+                    replay_path.relative_to(artifact_store.root)
+                except ValueError as exc:
+                    raise ConfigurationError(
+                        f"replay artifact escapes configured artifact root: {replay_path}"
+                    ) from exc
+                checksum_path = replay_path.with_suffix(replay_path.suffix + ".sha256")
+                for path, media_type in (
+                    (replay_path, "application/json"),
+                    (checksum_path, "text/plain"),
+                ):
+                    if not path.is_file():
+                        raise ConfigurationError(f"replay artifact is missing: {path}")
+                    artifact_records.append(
+                        ArtifactRecord(
+                            relative_path=str(path.relative_to(artifact_store.root)),
+                            media_type=media_type,
+                            byte_length=path.stat().st_size,
+                            sha256=sha256_file(path),
+                        )
+                    )
+                if artifact_records[0].sha256 != replay[1]:
+                    raise ConfigurationError(
+                        f"replay artifact checksum changed before manifest generation: {replay_path}"
+                    )
+            manifest = build_agent_manifest(
+                run,
+                config=config,
+                artifacts=tuple(artifact_records),
+            )
+            markdown = render_agent_markdown(
+                run,
+                replay_path=(
+                    result.replay_paths[run.run_id][0]
+                    if run.run_id in result.replay_paths
+                    else None
+                ),
+                replay_checksum=(
+                    result.replay_paths[run.run_id][1]
+                    if run.run_id in result.replay_paths
+                    else None
+                ),
+                retention=settings.retention,
+            )
+            (output_dir / f"{run.run_id}.md").write_text(markdown, encoding="utf-8")
+            (output_dir / f"{run.run_id}.jsonl").write_text(
+                render_agent_jsonl(run, retention=settings.retention),
+                encoding="utf-8",
+            )
+            manifest_write = artifact_store.write_text(
+                f"{run.run_id}/manifest.json",
+                json.dumps(manifest, indent=2, sort_keys=True),
+                media_type="application/json",
+            )
+            artifact_store.write_text(
+                f"{run.run_id}/manifest.json.sha256",
+                f"{manifest_write.record.sha256}  manifest.json\n",
+                media_type="text/plain",
+            )
+            # Attach only after both the manifest and detached checksum are
+            # durable.  A crash before this point leaves an orphan artifact,
+            # never a DB row claiming a manifest file that is absent.
+            manifest_store.update_agent_manifest(run.run_id, manifest)
+            replay_note = f" replay={replay[0]}" if replay else ""
+            outcome = run.outcome.value if run.outcome else "none"
+            print(
+                f"{run.scenario_ref.id}\t{run.attack_ref.id}\t{outcome}\t{run.run_id}{replay_note}"
+            )
+    finally:
+        manifest_store.close()
     if any(run.outcome is AgentOutcome.VERIFIED_EXPLOIT for run in result.runs):
         return EXIT_FAILED
     if any(run.outcome in (AgentOutcome.INCONCLUSIVE, AgentOutcome.ERROR) for run in result.runs):
@@ -723,11 +778,16 @@ async def _replay_async(args: argparse.Namespace) -> int:
     from cot_redteam.agent.replay import load_replay, run_replay
 
     artifact = load_replay(args.artifact)
-    settings = AgentSecuritySettings()
+    # With no config, let exact replay apply the artifact's recorded budgets
+    # and seed.  Constructing default settings here would turn omitted config
+    # into an implicit budget override and reject valid scan artifacts.
+    settings: AgentSecuritySettings | None = None
     if args.config:
         config = load_config(args.config)
-        if config.agent is not None:
-            settings = config.agent
+        # Preserve the historical default for a supplied general config that
+        # has no agent section; an explicit agent section remains the caller
+        # override validated by exact replay.
+        settings = config.agent if config.agent is not None else AgentSecuritySettings()
     result = await run_replay(artifact, fixture=args.fixture, settings=settings)
     print(result.message)
     return result.exit_code

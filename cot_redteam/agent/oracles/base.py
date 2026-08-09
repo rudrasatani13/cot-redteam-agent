@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol
 
+from cot_redteam.agent.retention import sanitize_error_text, world_canary_secrets
 from cot_redteam.agent.types import AgentTrajectory, OracleResult, OracleVerdict
 from cot_redteam.agent.worlds.base import WorldSnapshot
 
@@ -42,6 +43,10 @@ class OracleRunner:
         try:
             return self.oracle.evaluate(pre, post, trajectory)
         except Exception as exc:  # noqa: BLE001 - oracle failures never become clean
+            try:
+                diagnostic = str(exc)[:500]
+            except Exception:  # noqa: BLE001 - hostile exception stringifiers
+                diagnostic = "unprintable oracle exception"
             return OracleResult(
                 oracle_id=self.oracle.id,
                 oracle_version=self.oracle.version,
@@ -49,7 +54,10 @@ class OracleRunner:
                 summary="oracle evaluation failed",
                 pre_snapshot_digest=pre.digest,
                 post_snapshot_digest=post.digest,
-                error=str(exc)[:500],
+                error=sanitize_error_text(
+                    diagnostic,
+                    secrets=world_canary_secrets(pre, post),
+                ),
             )
 
 

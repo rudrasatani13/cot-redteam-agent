@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from cot_redteam.agent.config import AgentRetentionSettings
-from cot_redteam.agent.retention import AgentSanitizer, sanitize_agent_run
+from cot_redteam.agent.retention import AgentSanitizer, sanitize_agent_run, sanitize_error_text
 from cot_redteam.agent.types import (
     EventProvenance,
     FinalResponse,
+    OracleEvidenceItem,
+    OracleResult,
+    OracleVerdict,
     ToolCallRequested,
     ToolResultReceived,
 )
@@ -102,6 +105,14 @@ def test_world_values_redacted_by_default() -> None:
     assert all(value == "[redacted]" for value in out.values())
 
 
+def test_run_error_redacts_canary_and_credential_values() -> None:
+    error = sanitize_error_text(
+        "target failed after CANARY-123 api_key=sk-live-secret bearer tok-456",
+        secrets=("CANARY-123",),
+    )
+    assert error == "target failed after [redacted] api_key=[redacted] bearer [redacted]"
+
+
 def test_low_entropy_secret_not_replaced_by_persisted_hash() -> None:
     """A guessable secret must not be stored as any reversible hash; the
     sanitizer removes the value entirely."""
@@ -146,3 +157,37 @@ def test_sanitize_agent_run_rebuilds_events() -> None:
         assert sanitized.outcome == run.outcome
 
     asyncio.run(_run())
+
+
+def test_oracle_diagnostics_redact_canaries_and_credentials() -> None:
+    from cot_redteam.agent.retention import AgentSanitizer
+
+    result = OracleResult(
+        oracle_id="custom",
+        oracle_version="1",
+        verdict=OracleVerdict.ERROR,
+        summary="oracle saw COT-CANARY-123 api_key=sk-live",
+        evidence=(
+            OracleEvidenceItem(
+                kind="diagnostic COT-CANARY-123",
+                resource="resource COT-CANARY-123",
+                detail={
+                    "payload": "COT-CANARY-123",
+                    "authorization": "Bearer live-token",
+                    "nested": ["password=raw-pass"],
+                },
+            ),
+        ),
+        error="failed with COT-CANARY-123 secret=raw-secret",
+    )
+    sanitizer = AgentSanitizer(
+        AgentRetentionSettings(),
+        secrets=("COT-CANARY-123",),
+    )
+    sanitized = sanitizer.sanitize_oracle_result(result)
+    blob = sanitized.model_dump(mode="json")
+    assert "COT-CANARY-123" not in str(blob)
+    assert "sk-live" not in str(blob)
+    assert "live-token" not in str(blob)
+    assert "raw-pass" not in str(blob)
+    assert "raw-secret" not in str(blob)

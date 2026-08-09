@@ -107,8 +107,14 @@ class ToolGateway:
         sanitize_result: SanitizeResult | None = None,
         authorization_policy: tuple[AuthorizationScope, ...] = (),
     ) -> None:
-        self.world = world
-        self.trajectory = trajectory
+        self._world = world
+        # Keep the producer-owned recorder private; targets receive only the
+        # restricted facade on TargetRuntime and cannot append gateway events.
+        trusted_writer = trajectory._trusted_writer()
+        self.__record_event = trusted_writer.record
+        self._run_id = trusted_writer.run_id
+        self._session_id = trusted_writer.session_id
+        self._agent_id = trusted_writer.agent_id
         self.scenario_id = scenario_id
         self.tool_allowlist = frozenset(tool_allowlist)
         self.scope_resolver = scope_resolver
@@ -179,10 +185,10 @@ class ToolGateway:
         observed = self._observed_authorization(derived)
         request_event = ToolCallRequested(
             event_type="tool_call_requested",
-            run_id=self.trajectory.run_id,
-            session_id=self.trajectory.session_id,
+            run_id=self._run_id,
+            session_id=self._session_id,
             event_id=f"gw-{call_id}-req",
-            agent_id=self.trajectory.agent_id,
+            agent_id=self._agent_id,
             provenance=provenance,
             call_id=call_id,
             tool_name=tool_name,
@@ -192,7 +198,7 @@ class ToolGateway:
             observed_authorization_scope=(derived,) if derived is not None else (),
             status=EventStatus.REQUESTED,
         )
-        await self.trajectory.record(request_event)
+        await self.__record_event(request_event)
         parent_event_id = request_event.event_id
 
         async def fail(
@@ -202,14 +208,14 @@ class ToolGateway:
             authorization_state: AuthorizationState,
             executed: bool = False,
         ) -> JsonValue:
-            await self.trajectory.record(
+            await self.__record_event(
                 ActionEvent(
                     event_type="action_event",
-                    run_id=self.trajectory.run_id,
-                    session_id=self.trajectory.session_id,
+                    run_id=self._run_id,
+                    session_id=self._session_id,
                     event_id=f"gw-{call_id}-action",
                     parent_event_id=parent_event_id,
-                    agent_id=self.trajectory.agent_id,
+                    agent_id=self._agent_id,
                     provenance=provenance,
                     call_id=call_id,
                     action_kind=tool_name,
@@ -219,20 +225,20 @@ class ToolGateway:
                     requested_authorization_scope=requested_authorization,
                     observed_authorization_scope=(derived,) if derived is not None else (),
                     authorization_state=authorization_state,
-                    state_after_digest=self.world.snapshot().digest,
+                    state_after_digest=self._world.snapshot().digest,
                     status=EventStatus.DENIED if not executed else EventStatus.FAILED,
                     error_code=error_code,
                     error_message=error_message,
                 )
             )
-            await self.trajectory.record(
+            await self.__record_event(
                 ToolResultReceived(
                     event_type="tool_result_received",
-                    run_id=self.trajectory.run_id,
-                    session_id=self.trajectory.session_id,
+                    run_id=self._run_id,
+                    session_id=self._session_id,
                     event_id=f"gw-{call_id}-res",
                     parent_event_id=parent_event_id,
-                    agent_id=self.trajectory.agent_id,
+                    agent_id=self._agent_id,
                     provenance=provenance,
                     call_id=call_id,
                     tool_name=tool_name,
@@ -244,7 +250,7 @@ class ToolGateway:
             )
             return {"error": error_code, "message": error_message}
 
-        spec = self.world.tools.get(tool_name)
+        spec = self._world.tools.get(tool_name)
         if spec is None:
             await fail(
                 error_code="tool_denied",
@@ -300,7 +306,7 @@ class ToolGateway:
                 )
                 raise ToolLimitExceededError("per-run action count limit exceeded")
             self._actions_taken += 1
-            state_before = self.world.snapshot().digest
+            state_before = self._world.snapshot().digest
             try:
                 raw_result = await asyncio.wait_for(
                     spec.handler(arguments),
@@ -324,15 +330,15 @@ class ToolGateway:
         # The handler ran: record the executed ActionEvent with pre/post
         # state digests BEFORE result serialization. A later result failure
         # is a separate FAILED ToolResultReceived, never an erased action.
-        state_after = self.world.snapshot().digest
-        await self.trajectory.record(
+        state_after = self._world.snapshot().digest
+        await self.__record_event(
             ActionEvent(
                 event_type="action_event",
-                run_id=self.trajectory.run_id,
-                session_id=self.trajectory.session_id,
+                run_id=self._run_id,
+                session_id=self._session_id,
                 event_id=f"gw-{call_id}-action",
                 parent_event_id=parent_event_id,
-                agent_id=self.trajectory.agent_id,
+                agent_id=self._agent_id,
                 provenance=provenance,
                 call_id=call_id,
                 action_kind=tool_name,
@@ -349,14 +355,14 @@ class ToolGateway:
         try:
             serialized_result = json.dumps(raw_result, ensure_ascii=False, sort_keys=True)
         except (TypeError, ValueError) as exc:
-            await self.trajectory.record(
+            await self.__record_event(
                 ToolResultReceived(
                     event_type="tool_result_received",
-                    run_id=self.trajectory.run_id,
-                    session_id=self.trajectory.session_id,
+                    run_id=self._run_id,
+                    session_id=self._session_id,
                     event_id=f"gw-{call_id}-res",
                     parent_event_id=parent_event_id,
-                    agent_id=self.trajectory.agent_id,
+                    agent_id=self._agent_id,
                     provenance=provenance,
                     call_id=call_id,
                     tool_name=tool_name,
@@ -368,14 +374,14 @@ class ToolGateway:
             )
             raise WorldStateError("tool result is not JSON-serializable") from exc
         if len(serialized_result.encode("utf-8")) > self.max_serialized_result_bytes:
-            await self.trajectory.record(
+            await self.__record_event(
                 ToolResultReceived(
                     event_type="tool_result_received",
-                    run_id=self.trajectory.run_id,
-                    session_id=self.trajectory.session_id,
+                    run_id=self._run_id,
+                    session_id=self._session_id,
                     event_id=f"gw-{call_id}-res",
                     parent_event_id=parent_event_id,
-                    agent_id=self.trajectory.agent_id,
+                    agent_id=self._agent_id,
                     provenance=provenance,
                     call_id=call_id,
                     tool_name=tool_name,
@@ -387,14 +393,14 @@ class ToolGateway:
             )
             raise ToolLimitExceededError("serialized result exceeds the size limit")
 
-        await self.trajectory.record(
+        await self.__record_event(
             ToolResultReceived(
                 event_type="tool_result_received",
-                run_id=self.trajectory.run_id,
-                session_id=self.trajectory.session_id,
+                run_id=self._run_id,
+                session_id=self._session_id,
                 event_id=f"gw-{call_id}-res",
                 parent_event_id=parent_event_id,
-                agent_id=self.trajectory.agent_id,
+                agent_id=self._agent_id,
                 provenance=provenance,
                 call_id=call_id,
                 tool_name=tool_name,

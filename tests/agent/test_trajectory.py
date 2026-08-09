@@ -6,9 +6,11 @@ import asyncio
 
 import pytest
 
-from cot_redteam.agent.trajectory import TrajectoryRecorder
+from cot_redteam.agent.trajectory import TrajectoryPersistenceError, TrajectoryRecorder
 from cot_redteam.agent.types import (
+    ActionEvent,
     AgentStep,
+    AuthorizationState,
     EventProvenance,
     FinalResponse,
 )
@@ -44,6 +46,29 @@ async def test_duplicate_event_id_rejected() -> None:
     with pytest.raises(ValueError, match="duplicate event id"):
         await recorder.record(_step("r", "e1"))
     assert recorder.event_count == 1
+
+
+async def test_raw_recorder_rejects_privileged_evidence_events() -> None:
+    recorder = TrajectoryRecorder(run_id="r", session_id="s", agent_id="scripted")
+    forged = ActionEvent(
+        event_type="action_event",
+        run_id="r",
+        session_id="s",
+        event_id="forged-action",
+        agent_id="scripted",
+        provenance=EventProvenance(source_kind="target", source_id="scripted"),
+        call_id="forged-call",
+        action_kind="webhook.send",
+        resource="webhook.send",
+        attempted=True,
+        executed=True,
+        authorization_state=AuthorizationState.UNAUTHORIZED,
+        state_before_digest="before",
+        state_after_digest="after",
+    )
+    with pytest.raises(PermissionError, match="trusted producer"):
+        await recorder.record(forged)
+    assert recorder.event_count == 0
 
 
 async def test_run_session_agent_mismatch_rejected() -> None:
@@ -103,3 +128,29 @@ async def test_parent_relationships_preserved() -> None:
     trajectory = recorder.build_trajectory()
     assert trajectory.events[1].parent_event_id == "e1"
     assert final.sequence_no == 2
+
+
+async def test_event_sink_failure_closes_recorder_at_durable_prefix() -> None:
+    persisted: list[str] = []
+
+    def sink(envelope) -> None:
+        if envelope["event_id"] == "e2":
+            raise OSError("disk full")
+        persisted.append(str(envelope["event_id"]))
+
+    recorder = TrajectoryRecorder(
+        run_id="r",
+        session_id="s",
+        agent_id="scripted",
+        event_sink=sink,
+    )
+    await recorder.record(_step("r", "e1"))
+    with pytest.raises(TrajectoryPersistenceError, match="failed to persist"):
+        await recorder.record(_step("r", "e2"))
+    # The failed event is not part of the in-memory trajectory, and no later
+    # event can be appended after the missing durable prefix.
+    assert persisted == ["e1"]
+    assert recorder.event_count == 1
+    assert [event.event_id for event in recorder.build_trajectory().events] == ["e1"]
+    with pytest.raises(TrajectoryPersistenceError, match="recorder is closed"):
+        await recorder.record(_step("r", "e3"))

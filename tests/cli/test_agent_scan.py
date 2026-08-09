@@ -86,6 +86,19 @@ def test_agent_scan_runs_and_saves_replays(tmp_path: Path, monkeypatch: pytest.M
     with SQLiteRunStore(tmp_path / "results" / "cot_redteam.db") as store:
         assert store.list_agent_runs()
         assert store.get_agent_run(replays[0].parent.name) is not None
+        persisted_manifest = store.get_agent_manifest(replays[0].parent.name)
+        assert persisted_manifest is not None
+        assert persisted_manifest["run_id"] == replays[0].parent.name
+        assert persisted_manifest["outcome"] == "verified_exploit"
+        artifact_paths = {item["path"] for item in persisted_manifest["artifacts"]}
+        assert f"{replays[0].parent.name}/replay.json" in artifact_paths
+        assert f"{replays[0].parent.name}/replay.json.sha256" in artifact_paths
+        assert persisted_manifest == json.loads(
+            store.connection.execute(
+                "SELECT manifest_json FROM agent_runs WHERE run_id = ?",
+                (replays[0].parent.name,),
+            ).fetchone()[0]
+        )
     # Reports were written.
     reports = list((tmp_path / "results" / "agent").glob("*.md"))
     assert len(reports) == 3
@@ -132,21 +145,26 @@ def test_replay_cli_reproduces_exploit(tmp_path: Path, monkeypatch: pytest.Monke
     from cot_redteam.agent.api import run_agent_scenario, save_replay_artifact
     from cot_redteam.agent.config import AgentSecuritySettings
     from cot_redteam.agent.scenarios.support import support_fixture
+    from cot_redteam.core.config import BudgetSettings
 
     asyncio = __import__("asyncio")
+    settings = AgentSecuritySettings(
+        budgets=BudgetSettings(max_requests=500, max_elapsed_seconds=600),
+    )
 
     async def _save() -> str:
         with SQLiteRunStore(tmp_path / "agent.db") as store:
             run = await run_agent_scenario(
                 scenario_id="support.indirect_prompt_injection.v1",
                 fixture="vulnerable",
+                settings=settings,
                 seed=7,
                 run_store=store,
             )
             saved = save_replay_artifact(
                 run,
                 fixture=support_fixture("support.indirect_prompt_injection.v1", "vulnerable"),
-                settings=AgentSecuritySettings(),
+                settings=settings,
                 artifact_store=ArtifactStore(tmp_path / "artifacts"),
             )
             assert saved is not None
@@ -156,6 +174,48 @@ def test_replay_cli_reproduces_exploit(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.chdir(tmp_path)
     args = _Args(artifact=path, config=None, fixture=None)
     assert cmd_replay(args) == EXIT_FAILED  # exploit reproduced
+
+
+def test_replay_cli_explicit_config_budget_override_is_enforced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit config remains a caller budget override for exact replay."""
+    from cot_redteam.agent.api import run_agent_scenario, save_replay_artifact
+    from cot_redteam.agent.config import AgentSecuritySettings
+    from cot_redteam.agent.replay import ReplayError
+    from cot_redteam.agent.scenarios.support import support_fixture
+    from cot_redteam.core.config import BudgetSettings
+
+    asyncio = __import__("asyncio")
+    artifact_settings = AgentSecuritySettings(
+        budgets=BudgetSettings(max_requests=500, max_elapsed_seconds=600),
+    )
+
+    async def _save() -> str:
+        with SQLiteRunStore(tmp_path / "agent.db") as store:
+            run = await run_agent_scenario(
+                scenario_id="support.indirect_prompt_injection.v1",
+                fixture="vulnerable",
+                settings=artifact_settings,
+                seed=7,
+                run_store=store,
+            )
+            saved = save_replay_artifact(
+                run,
+                fixture=support_fixture("support.indirect_prompt_injection.v1", "vulnerable"),
+                settings=artifact_settings,
+                artifact_store=ArtifactStore(tmp_path / "artifacts"),
+            )
+            assert saved is not None
+            return saved[0]
+
+    path = asyncio.run(_save())
+    config = _write_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    args = _Args(artifact=path, config=str(config), fixture=None)
+    with pytest.raises(ReplayError, match="budget_configuration"):
+        cmd_replay(args)
 
 
 def test_replay_cli_corrupt_exit_config(tmp_path: Path) -> None:
