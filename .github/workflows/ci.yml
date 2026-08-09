@@ -30,6 +30,9 @@ jobs:
           python scripts/check_critical_coverage.py coverage.json
       - name: Offline agent scan / replay / regression
         run: |
+          # Commands intentionally exit 1 (exploit found/reproduced); capture
+          # and assert instead of letting `bash -e` abort the step.
+          set +e
           SMOKE="$(mktemp -d)"
           cp cot_redteam/data/agent_security.example.yaml "$SMOKE/agent.yaml"
           mkdir -p "$SMOKE/security_regressions"
@@ -120,6 +123,9 @@ jobs:
           print("wheel agent example config ok")
           PY
           # Offline agent flow from the installed wheel (no credentials).
+          # Commands intentionally exit 1 (exploit found/reproduced); assert
+          # the exit codes instead of letting `bash -e` abort.
+          set +e
           mkdir -p "$SMOKE/security_regressions"
           cp "$GITHUB_WORKSPACE"/tests/fixtures/security_regressions/* "$SMOKE/security_regressions/"
           cp "$GITHUB_WORKSPACE"/cot_redteam/data/agent_security.example.yaml "$SMOKE/agent.yaml"
