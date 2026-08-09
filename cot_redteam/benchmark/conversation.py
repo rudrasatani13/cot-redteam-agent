@@ -33,6 +33,23 @@ class ConversationStatus(str, Enum):
     COMPLETED = "completed"
     PROVIDER_ERROR = "provider_error"
     BUDGET_EXCEEDED = "budget_exceeded"
+    INTERNAL_ERROR = "internal_error"
+
+
+def internal_error_transcript(trial_id: str, error: str) -> ConversationTranscript:
+    """Build a minimal transcript for an unexpected internal trial failure.
+
+    Preserves the trial identity and a sanitized error so a benchmark run
+    can keep typed partial/failed evidence instead of aborting unrelated
+    trials. Never represents the trial as clean.
+    """
+    return ConversationTranscript(
+        trial_id=trial_id,
+        status=ConversationStatus.INTERNAL_ERROR,
+        messages=(),
+        turns=(),
+        error=error,
+    )
 
 
 @dataclass(frozen=True)

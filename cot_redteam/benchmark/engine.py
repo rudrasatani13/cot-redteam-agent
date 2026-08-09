@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from cot_redteam.benchmark.canary import generate_canary
-from cot_redteam.benchmark.conversation import ConversationRunner
+from cot_redteam.benchmark.conversation import (
+    ConversationRunner,
+    internal_error_transcript,
+)
 from cot_redteam.benchmark.judge import JudgeRequest, run_judge
 from cot_redteam.benchmark.planner import BenchmarkPlan, PlannedTrial
 from cot_redteam.benchmark.preparation import prepare_trial
@@ -183,6 +186,27 @@ class BenchmarkEngine:
             judge_results=judges,
         )
 
+    async def _run_trial_safe(self, trial: PlannedTrial) -> BenchmarkTrialResult:
+        """Boundary that converts unexpected trial exceptions into typed
+        internal-error evidence instead of aborting the whole run."""
+        try:
+            return await self._run_trial(trial)
+        except Exception as exc:  # noqa: BLE001 - isolate unexpected trial failures
+            return BenchmarkTrialResult(
+                trial=trial,
+                transcript=internal_error_transcript(trial.trial_id, str(exc)[:2000]),
+                scoring=TranscriptScoring(trial_id=trial.trial_id, outcomes=()),
+                canary_metadata={},
+                transformation_digest="",
+                judge_results=(),
+            )
+
     async def run(self, plan: BenchmarkPlan) -> BenchmarkExecution:
-        tasks = [asyncio.create_task(self._run_trial(trial)) for trial in plan.trials]
-        return BenchmarkExecution(results=tuple(await asyncio.gather(*tasks)))
+        tasks = [asyncio.create_task(self._run_trial_safe(trial)) for trial in plan.trials]
+        typed_results: list[BenchmarkTrialResult] = []
+        for result in await asyncio.gather(*tasks, return_exceptions=True):
+            if isinstance(result, BaseException):
+                # Cancellation or similar; surface it rather than dropping.
+                raise result
+            typed_results.append(result)
+        return BenchmarkExecution(results=tuple(typed_results))

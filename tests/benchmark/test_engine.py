@@ -87,3 +87,56 @@ async def test_engine_executes_prepares_and_scores_trial_end_to_end(
     system = provider.requests[0].messages[0].content
     assert "COTRT3-" in system
     assert result.canary_metadata["digest"]
+
+
+async def test_unexpected_trial_exception_is_isolated_not_fatal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An unexpected exception in one trial becomes typed internal-error
+    evidence while sibling trials finish; the run never aborts."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
+    config = load_config(Path("tests/fixtures/config/minimal.yaml"))
+    row = valid_scenario()
+    path = tmp_path / "suite.jsonl"
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    suite = ScenarioSuite.load_jsonl(path, suite_id="suite.test")
+    model = ModelRef.parse("openrouter:test/model")
+    plan = BenchmarkPlanner(
+        models=[model],
+        suites=[suite],
+        target_capabilities={"openrouter": EchoProvider.capabilities},
+        budgets=config.evaluation.budgets,
+        repetitions=2,
+        run_id="run-engine-iso",
+    ).create()
+
+    class BoomProvider(EchoProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def generate(self, model, request):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("unexpected boom")
+            return await super().generate(model, request)
+
+    provider = BoomProvider()
+    budget = BudgetTracker(config.evaluation.budgets)
+    execution = await BenchmarkEngine(
+        config,
+        FakeFactory(provider),
+        budget,
+    ).run(plan)
+
+    assert len(execution.results) == 2
+    statuses = [result.transcript.status.value for result in execution.results]
+    assert "completed" in statuses
+    assert "internal_error" in statuses
+    errored = next(
+        result for result in execution.results if result.transcript.status.value == "internal_error"
+    )
+    assert errored.transcript.error is not None
+    # The internal-error trial carries no success evidence: never clean.
+    assert not errored.scoring.outcomes
+    assert all(not outcome.eligible for outcome in errored.scoring.outcomes)
