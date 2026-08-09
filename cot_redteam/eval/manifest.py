@@ -298,7 +298,7 @@ def build_agent_manifest(
         ),
         "pre_snapshot_digest": run.pre_snapshot_digest,
         "post_snapshot_digest": run.post_snapshot_digest,
-        "trajectory_digest": run.trajectory.digest,
+        "trajectory_digest": run.original_trajectory_digest or run.trajectory.digest,
         "event_count": len(run.trajectory.events),
         "oracles": [
             {

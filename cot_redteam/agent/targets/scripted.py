@@ -21,8 +21,6 @@ from cot_redteam.agent.target import (
 from cot_redteam.agent.types import (
     AgentStep,
     AgentTargetCapabilities,
-    ApprovalDecision,
-    ApprovalValue,
     AuthorizationScope,
     EventProvenance,
     EventTrust,
@@ -123,22 +121,9 @@ class ScriptedTarget:
                     policy_id=step.approval_policy_id,
                     policy_version=step.approval_policy_version,
                 )
-                await runtime.trajectory.record(
-                    ApprovalDecision(
-                        run_id=request.run_id,
-                        session_id=request.session_id,
-                        event_id=f"{self.id}-approval-{request.run_id}-{index}",
-                        parent_event_id=f"{self.id}-step-{request.run_id}",
-                        agent_id=self.id,
-                        provenance=provenance,
-                        approval_id=approval_id,
-                        subject_action=subject_action,
-                        decision=ApprovalValue.GRANTED if granted else ApprovalValue.DENIED,
-                        principal=step.approval_principal,
-                        policy_id=step.approval_policy_id,
-                        policy_version=step.approval_policy_version,
-                    )
-                )
+                # The ApprovalDecision event is recorded by the approval gate
+                # (engine-owned, trusted provenance), never by the target, so
+                # a target cannot forge a granted approval.
                 if not granted:
                     continue
             await runtime.tool_gateway.execute(

@@ -135,7 +135,11 @@ def test_begin_append_finalize_round_trip(tmp_path: Path) -> None:
             loaded = store.get_agent_run(run.run_id)
             assert loaded is not None
             assert loaded.outcome is AgentOutcome.VERIFIED_EXPLOIT
-            assert loaded.trajectory.digest == run.trajectory.digest
+            # The persisted view is sanitized under default retention, so the
+            # loaded trajectory digest describes the sanitized content while
+            # the original digest is preserved as the proof anchor.
+            assert loaded.original_trajectory_digest == run.trajectory.digest
+            assert loaded.trajectory.digest != run.trajectory.digest
             assert len(loaded.trajectory.events) == len(run.trajectory.events)
             assert loaded.oracle_results == run.oracle_results
             assert loaded.findings == run.findings
@@ -173,6 +177,7 @@ def test_events_append_only_no_duplicates(tmp_path: Path) -> None:
                             (run.run_id,),
                         )
                     ],
+                    retention=AgentRetentionSettings(),
                 )
 
     asyncio.run(_run())
@@ -226,7 +231,9 @@ def test_failed_append_rolls_back_entire_batch(tmp_path: Path) -> None:
             from cot_redteam.storage.sqlite import sqlite3
 
             with pytest.raises(sqlite3.IntegrityError):
-                store.append_agent_events(run.run_id, [good, duplicate])
+                store.append_agent_events(
+                    run.run_id, [good, duplicate], retention=AgentRetentionSettings()
+                )
             after = store.connection.execute(
                 "SELECT COUNT(*) FROM agent_trajectory_events WHERE run_id = ?",
                 (run.run_id,),
@@ -262,7 +269,7 @@ def test_interrupted_run_recovery(tmp_path: Path) -> None:
                 budget_snapshot={},
                 started_at=datetime.now(timezone.utc),
             )
-            store.begin_agent_run(shell)
+            store.begin_agent_run(shell, retention=AgentRetentionSettings())
             assert store.get_agent_run("stale-run").status is AgentRunStatus.RUNNING  # type: ignore[union-attr]
             recovered = store.recover_incomplete_agent_runs(exclude_run_id="current-run")
             assert recovered == 1
@@ -350,6 +357,7 @@ def test_retention_view_sanitizes_loaded_run(tmp_path: Path) -> None:
                     assert event.sanitized_arguments is None
                 if isinstance(event, ToolResultReceived):
                     assert event.sanitized_result is None
+            assert loaded.original_trajectory_digest == run.trajectory.digest
 
     asyncio.run(_run())
 

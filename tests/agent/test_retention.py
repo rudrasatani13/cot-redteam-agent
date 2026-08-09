@@ -138,8 +138,11 @@ def test_sanitize_agent_run_rebuilds_events() -> None:
             if isinstance(event, FinalResponse):
                 assert event.text is None
                 assert event.text_retained is False
-        # Digests and oracle proof survive.
-        assert sanitized.trajectory.digest == run.trajectory.digest
+        # The sanitized trajectory's digest describes ITS OWN (sanitized)
+        # content — never a stale checksum — and the original digest is
+        # preserved on the run for proof anchoring.
+        assert sanitized.trajectory.digest != run.trajectory.digest
+        assert sanitized.original_trajectory_digest == run.trajectory.digest
         assert sanitized.outcome == run.outcome
 
     asyncio.run(_run())

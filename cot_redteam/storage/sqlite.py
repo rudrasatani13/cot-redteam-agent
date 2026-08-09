@@ -837,10 +837,16 @@ class SQLiteRunStore:
         self,
         run: AgentRun,
         *,
-        retention: AgentRetentionSettings | None = None,
+        retention: AgentRetentionSettings,
     ) -> None:
-        """Insert (or replace) the run row as RUNNING before target execution."""
-        del retention
+        """Insert (or replace) the run row as RUNNING before target execution.
+
+        ``retention`` is REQUIRED: the store is the last privacy boundary
+        and sanitizes even when the caller claims the run is already
+        sanitized.
+        """
+        sanitizer = AgentSanitizer(retention)
+        run = sanitizer.sanitize_run(run)
         if run.status is not AgentRunStatus.RUNNING:
             raise ValueError("begin_agent_run requires a RUNNING run")
         conn = self.connection
@@ -895,23 +901,22 @@ class SQLiteRunStore:
         run_id: str,
         events: Sequence[Mapping[str, object]],
         *,
-        retention: AgentRetentionSettings | None = None,
+        retention: AgentRetentionSettings,
     ) -> None:
         """Append sanitized event envelopes transactionally (append-only).
 
-        The store sanitizes again at this boundary even when the caller
+        ``retention`` is REQUIRED and applied unconditionally: the store is
+        the last privacy boundary and sanitizes again even when the caller
         claims the envelopes are already sanitized (defense in depth).
         """
         if not events:
             return
-        sanitizer = AgentSanitizer(retention) if retention is not None else None
+        sanitizer = AgentSanitizer(retention)
         conn = self.connection
         try:
             conn.execute("BEGIN")
             for envelope in events:
-                data = (
-                    sanitizer.sanitize_event(envelope) if sanitizer is not None else dict(envelope)
-                )
+                data = sanitizer.sanitize_event(envelope)
                 conn.execute(
                     """
                     INSERT INTO agent_trajectory_events(
@@ -1001,10 +1006,16 @@ class SQLiteRunStore:
         self,
         run: AgentRun,
         *,
-        retention: AgentRetentionSettings | None = None,
+        retention: AgentRetentionSettings,
         manifest: dict[str, Any] | None = None,
     ) -> None:
-        """Finalize status/outcome/digests plus oracle results and findings."""
+        """Finalize status/outcome/digests plus oracle results and findings.
+
+        ``retention`` is REQUIRED: the run is sanitized again at this
+        storage boundary before any persistence (defense in depth).
+        """
+        sanitizer = AgentSanitizer(retention)
+        run = sanitizer.sanitize_run(run)
         self.save_agent_oracle_results(run.run_id, run.oracle_results)
         self.save_agent_findings(run.run_id, run.findings)
         conn = self.connection
@@ -1024,7 +1035,10 @@ class SQLiteRunStore:
                     _dt(run.completed_at),
                     run.pre_snapshot_digest,
                     run.post_snapshot_digest,
-                    run.trajectory.digest,
+                    # The row keeps the ORIGINAL semantic digest (the proof
+                    # anchor used by replay); the sanitized view's own digest
+                    # describes the persisted events.
+                    run.original_trajectory_digest or run.trajectory.digest,
                     canonical_json(run.budget_snapshot),
                     canonical_json(manifest) if manifest is not None else None,
                     run.error,
@@ -1076,11 +1090,13 @@ class SQLiteRunStore:
             events.append(validate_agent_event(data))
         from cot_redteam.agent.types import AgentTrajectory
 
+        # The loaded events are the persisted (sanitized) view; its digest
+        # describes those events. The original semantic digest is preserved
+        # on the run for replay/proof anchoring.
         trajectory = AgentTrajectory(
             run_id=run_id,
             session_id=row["session_id"],
             events=tuple(events),
-            digest=row["trajectory_digest"],
         )
         oracle_rows = self.connection.execute(
             "SELECT result_json FROM agent_oracle_results WHERE run_id = ? ORDER BY oracle_id",
@@ -1108,6 +1124,7 @@ class SQLiteRunStore:
             status=AgentRunStatus(row["status"]),
             outcome=AgentOutcome(row["outcome"]) if row["outcome"] else None,
             trajectory=trajectory,
+            original_trajectory_digest=row["trajectory_digest"],
             pre_snapshot_digest=row["pre_snapshot_digest"],
             post_snapshot_digest=row["post_snapshot_digest"],
             oracle_results=oracle_results,

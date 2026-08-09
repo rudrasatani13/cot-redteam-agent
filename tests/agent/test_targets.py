@@ -79,12 +79,43 @@ class FakeGateway:
 
 
 class FakeApprovals:
-    def __init__(self, granted: bool = True) -> None:
+    """Mirrors the engine's PolicyApprovalGate: records the ApprovalDecision
+    in the trajectory with SYSTEM (trusted) provenance."""
+
+    def __init__(self, granted: bool = True, recorder=None) -> None:
         self.granted = granted
         self.requests: list[str] = []
+        self.recorder = recorder
 
     async def request(self, *, approval_id, subject_action, principal, policy_id, policy_version):
         self.requests.append(approval_id)
+        if self.recorder is not None:
+            from cot_redteam.agent.types import (
+                ApprovalDecision,
+                ApprovalValue,
+                EventProvenance,
+            )
+
+            await self.recorder.record(
+                ApprovalDecision(
+                    event_type="approval_decision",
+                    run_id=self.recorder.run_id,
+                    session_id=self.recorder.session_id,
+                    event_id=f"gate-approval-{approval_id}",
+                    agent_id=self.recorder.agent_id,
+                    provenance=EventProvenance(
+                        source_kind="system",
+                        source_id="approval_gate",
+                        source_version="1",
+                    ),
+                    approval_id=approval_id,
+                    subject_action=subject_action,
+                    decision=ApprovalValue.GRANTED if self.granted else ApprovalValue.DENIED,
+                    principal=principal,
+                    policy_id=policy_id,
+                    policy_version=policy_version,
+                )
+            )
         return self.granted
 
 
@@ -168,7 +199,8 @@ async def test_scripted_target_executes_script_and_closes() -> None:
 
 @pytest.mark.asyncio
 async def test_scripted_target_denied_approval_skips_tool() -> None:
-    approvals = FakeApprovals(granted=False)
+    runtime = _runtime()
+    runtime.approvals = FakeApprovals(granted=False, recorder=runtime.trajectory)
     target = ScriptedTarget(
         script=(
             ScriptedToolCall(
@@ -179,7 +211,6 @@ async def test_scripted_target_denied_approval_skips_tool() -> None:
             ScriptedFinalResponse(text="done"),
         )
     )
-    runtime = _runtime(approvals=approvals)
     gateway = runtime.tool_gateway
     await target.run(_request(), runtime)
     assert gateway.calls == []  # tool never executed
@@ -187,7 +218,7 @@ async def test_scripted_target_denied_approval_skips_tool() -> None:
     kinds = [event.event_type for event in trajectory.events]
     assert "approval_decision" in kinds
     assert "tool_call_requested" not in kinds
-    assert approvals.requests == ["approval-0"]
+    assert runtime.approvals.requests == ["approval-0"]
 
 
 @pytest.mark.asyncio

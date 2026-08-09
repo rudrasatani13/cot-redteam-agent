@@ -42,7 +42,10 @@ def test_reset_returns_byte_equivalent_snapshot() -> None:
 def test_no_state_carries_between_trials() -> None:
     world = _world()
     baseline = world.snapshot()
-    world._webhook_send({"name": "audit", "payload": {"x": 1}})
+    # The mutation must actually happen (awaited), then reset must restore
+    # the byte-equivalent initial state.
+    asyncio.run(world._webhook_send({"name": "audit", "payload": {"x": 1}}))
+    assert world.outbound_sink  # mutation took effect
     world.reset()
     assert world.snapshot().state == baseline.state
 

@@ -44,10 +44,25 @@ from cot_redteam.eval.events import ProgressCallback
 
 
 class PolicyApprovalGate:
-    """Approval interface backed by the scenario's approval policy."""
+    """Approval interface backed by the scenario approval policy.
 
-    def __init__(self, *, approved_actions: tuple[str, ...] = ()) -> None:
+    Records each ApprovalDecision in the trajectory with SYSTEM provenance
+    (trusted). Targets never record approval decisions themselves, so a
+    target cannot forge a granted approval.
+    """
+
+    def __init__(
+        self,
+        *,
+        approved_actions: tuple[str, ...] = (),
+        recorder: TrajectoryRecorder | None = None,
+        run_id: str = "",
+        session_id: str = "",
+    ) -> None:
         self.approved_actions = frozenset(approved_actions)
+        self._recorder = recorder
+        self._run_id = run_id
+        self._session_id = session_id
 
     async def request(
         self,
@@ -58,8 +73,35 @@ class PolicyApprovalGate:
         policy_id: str,
         policy_version: str,
     ) -> bool:
-        del approval_id, principal, policy_id, policy_version
-        return subject_action in self.approved_actions
+        granted = subject_action in self.approved_actions
+        if self._recorder is not None:
+            from cot_redteam.agent.types import (
+                ApprovalDecision,
+                ApprovalValue,
+                EventProvenance,
+            )
+
+            await self._recorder.record(
+                ApprovalDecision(
+                    event_type="approval_decision",
+                    run_id=self._run_id,
+                    session_id=self._session_id,
+                    event_id=f"gate-approval-{approval_id}",
+                    agent_id=self._recorder.agent_id,
+                    provenance=EventProvenance(
+                        source_kind="system",
+                        source_id="approval_gate",
+                        source_version="1",
+                    ),
+                    approval_id=approval_id,
+                    subject_action=subject_action,
+                    decision=ApprovalValue.GRANTED if granted else ApprovalValue.DENIED,
+                    principal=principal,
+                    policy_id=policy_id,
+                    policy_version=policy_version,
+                )
+            )
+        return granted
 
 
 def _status_for_outcome(outcome: AgentOutcome) -> AgentRunStatus:
@@ -122,12 +164,16 @@ class AgentExecutionEngine:
         self.manifest = manifest
 
     def _new_gateway(self, recorder: TrajectoryRecorder) -> ToolGateway:
+        from cot_redteam.agent.scenarios.support import support_scope_resolver
+
         return ToolGateway(
             world=self.world,
             trajectory=recorder,
             scenario_id=self.scenario.id,
             tool_allowlist=self.scenario.tool_allowlist,
-            max_actions=self.scenario.max_actions,
+            scope_resolver=support_scope_resolver,
+            # Users can tighten a scenario's ceiling but never loosen it.
+            max_actions=min(self.scenario.max_actions, self.settings.max_actions),
             max_serialized_argument_bytes=self.settings.max_serialized_argument_bytes,
             max_serialized_result_bytes=self.settings.max_serialized_result_bytes,
             tool_timeout_seconds=self.settings.tool_timeout_seconds,
@@ -212,7 +258,12 @@ class AgentExecutionEngine:
             event_sink=event_sink,
         )
         gateway = self._new_gateway(recorder)
-        approvals = PolicyApprovalGate(approved_actions=self.scenario.approved_actions)
+        approvals = PolicyApprovalGate(
+            approved_actions=self.scenario.approved_actions,
+            recorder=recorder,
+            run_id=run_id,
+            session_id=session_id,
+        )
         runtime = TargetRuntime(
             run_id=run_id,
             session_id=session_id,
@@ -276,6 +327,7 @@ class AgentExecutionEngine:
             status=status,
             outcome=outcome,
             trajectory=trajectory,
+            original_trajectory_digest=trajectory.digest,
             pre_snapshot_digest=pre.digest,
             post_snapshot_digest=post.digest,
             oracle_results=oracle_results,

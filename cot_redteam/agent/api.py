@@ -15,12 +15,15 @@ from cot_redteam.agent.scenarios.support import (
     support_fixture,
     support_scenario,
 )
+from cot_redteam.agent.target import Target
+from cot_redteam.agent.targets.provider_adapter import ProviderTargetAdapter
 from cot_redteam.agent.targets.scripted import ScriptedTarget
 from cot_redteam.agent.types import AgentOutcome, AgentRun
 from cot_redteam.agent.worlds.support import SupportAgentWorld
 from cot_redteam.core.config import AppConfig
 from cot_redteam.core.errors import ConfigurationError
 from cot_redteam.core.invocation import InvocationService
+from cot_redteam.core.types import ModelRef
 from cot_redteam.eval.budgets import BudgetTracker
 from cot_redteam.eval.events import ProgressCallback
 from cot_redteam.storage.artifacts import ArtifactStore
@@ -62,13 +65,28 @@ async def run_agent_scenario(
     fixture_spec = support_fixture(scenario_id, fixture)
     settings = settings or AgentSecuritySettings()
     world = SupportAgentWorld(initial_state=fixture_spec.initial_state)
-    target = ScriptedTarget(
-        script=fixture_spec.script,
-        target_id="scripted",
-        target_version=fixture_spec.version,
-        retain_final_response=settings.retention.retain_final_response,
-    )
     service = invocation_service or _default_invocation_service()
+    if settings.target == "provider_adapter":
+        if not settings.target_model:
+            raise ConfigurationError("agent target=provider_adapter requires target_model")
+        model_ref = ModelRef.parse(settings.target_model)
+        if model_ref.provider not in service.config.providers:
+            raise ConfigurationError(
+                f"agent target provider {model_ref.provider!r} is not configured; "
+                f"available: {', '.join(sorted(service.config.providers))}"
+            )
+        target: Target = ProviderTargetAdapter(
+            model=model_ref,
+            system_prompt=settings.system_prompt,
+            retain_final_response=settings.retention.retain_final_response,
+        )
+    else:
+        target = ScriptedTarget(
+            script=fixture_spec.script,
+            target_id="scripted",
+            target_version=fixture_spec.version,
+            retain_final_response=settings.retention.retain_final_response,
+        )
     resolved_run_id = run_id or f"agent-{uuid.uuid4().hex[:12]}"
     resolved_session_id = session_id or f"session-{uuid.uuid4().hex[:12]}"
     if run_store is not None:

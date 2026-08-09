@@ -88,6 +88,10 @@ class AgentSanitizer:
         return cast("dict[str, JsonValue]", redact_sensitive_values(dict(state)))
 
     def sanitize_trajectory(self, trajectory: AgentTrajectory) -> AgentTrajectory:
+        """Sanitize events and RECOMPUTE the digest over the sanitized
+        content: a trajectory object must never carry a checksum that does
+        not describe its own events. The original digest is preserved by
+        ``sanitize_run`` in ``AgentRun.original_trajectory_digest``."""
         events: list[AgentEventUnion] = []
         for event in trajectory.events:
             if isinstance(event, FinalResponse) and not self.settings.retain_final_response:
@@ -99,18 +103,25 @@ class AgentSanitizer:
             elif isinstance(event, MemoryMutation) and not self.settings.retain_memory_values:
                 event = event.model_copy(update={"value_present": False})
             events.append(event)
+        # digest=None -> recomputed over the sanitized events.
         return AgentTrajectory(
             run_id=trajectory.run_id,
             session_id=trajectory.session_id,
             events=tuple(events),
-            digest=trajectory.digest,
         )
 
     def sanitize_run(self, run: AgentRun) -> AgentRun:
-        """Final boundary enforcement over a complete AgentRun."""
+        """Final boundary enforcement over a complete AgentRun.
+
+        The sanitized trajectory's digest describes the sanitized content;
+        ``AgentRun.original_trajectory_digest`` keeps the proof anchor of
+        the original (pre-retention) trajectory.
+        """
         return run.model_copy(
             update={
                 "trajectory": self.sanitize_trajectory(run.trajectory),
+                "original_trajectory_digest": run.original_trajectory_digest
+                or run.trajectory.digest,
             }
         )
 

@@ -452,6 +452,11 @@ class AgentRun(BaseModel):
     status: AgentRunStatus
     outcome: AgentOutcome | None = None
     trajectory: AgentTrajectory
+    #: Digest of the original (pre-retention) semantic trajectory. The
+    #: trajectory digest on the (possibly sanitized) trajectory always
+    #: describes its own content; this field anchors the proof to the
+    #: original run.
+    original_trajectory_digest: str | None = None
     pre_snapshot_digest: str | None = None
     post_snapshot_digest: str | None = None
     oracle_results: tuple[OracleResult, ...] = ()

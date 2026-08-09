@@ -78,6 +78,48 @@ class BudgetSettings(StrictModel):
     max_estimated_cost: float | None = Field(default=None, ge=0)
 
 
+DEFAULT_FIXTURES: list[Literal["vulnerable", "patched", "clean"]] = ["vulnerable"]
+
+
+class AgentRetentionSettings(StrictModel):
+    """Privacy-first agent retention defaults."""
+
+    retain_final_response: bool = False
+    retain_tool_arguments: bool = False
+    retain_tool_results: bool = False
+    retain_memory_values: bool = False
+    retain_world_values: bool = False
+    retain_model_reasoning: bool = False
+
+
+class AgentSecuritySettings(StrictModel):
+    """Strict optional v0.6 agent-security configuration."""
+
+    scenarios: list[str] = Field(default_factory=list)
+    fixtures: list[Literal["vulnerable", "patched", "clean"]] = Field(
+        default_factory=lambda: list(DEFAULT_FIXTURES)
+    )
+    target: Literal["scripted", "provider_adapter"] = "scripted"
+    budgets: BudgetSettings = Field(default_factory=BudgetSettings)
+    retention: AgentRetentionSettings = Field(default_factory=AgentRetentionSettings)
+    max_actions: int = Field(default=100, ge=1)
+    max_serialized_argument_bytes: int = Field(default=8192, ge=1)
+    max_serialized_result_bytes: int = Field(default=65536, ge=1)
+    tool_timeout_seconds: float = Field(default=5.0, gt=0)
+    max_concurrent_tool_calls: int = Field(default=4, ge=1)
+    output_dir: str = "./results/agent"
+    target_model: str | None = None
+    system_prompt: str | None = None
+
+    @model_validator(mode="after")
+    def _provider_adapter_requires_target_model(self) -> AgentSecuritySettings:
+        if self.target == "provider_adapter" and not self.target_model:
+            raise ValueError(
+                "agent target=provider_adapter requires target_model (e.g. mock:mock-model)"
+            )
+        return self
+
+
 class EvaluationSettings(StrictModel):
     models: list[str] = Field(default_factory=list)
     attacks: list[str] = Field(default_factory=list)
@@ -172,17 +214,8 @@ class AppConfig(StrictModel):
     generative: GenerativeSettings = Field(default_factory=GenerativeSettings)
     #: Optional v0.6 agent settings. Absent configs validate and run exactly
     #: as before; the agent CLI requires this section or a dedicated agent
-    #: example config. Coerced to AgentSecuritySettings by the validator.
-    agent: Any | None = None
-
-    @model_validator(mode="after")
-    def _coerce_agent_settings(self) -> AppConfig:
-        if isinstance(self.agent, dict):
-            from cot_redteam.agent.config import AgentSecuritySettings
-
-            agent = AgentSecuritySettings.model_validate(self.agent)
-            return self.model_copy(update={"agent": agent})
-        return self
+    #: example config.
+    agent: AgentSecuritySettings | None = None
 
     @model_validator(mode="after")
     def _providers_non_empty(self) -> AppConfig:

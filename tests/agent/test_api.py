@@ -32,7 +32,9 @@ async def test_api_run_with_store_and_manifest(tmp_path: Path) -> None:
         loaded = store.get_agent_run("api-run-1")
         assert loaded is not None
         assert loaded.outcome is AgentOutcome.VERIFIED_EXPLOIT
-        assert loaded.trajectory.digest == run.trajectory.digest
+        # Sanitized persisted view: loaded digest describes its own content;
+        # the original digest is the preserved proof anchor.
+        assert loaded.original_trajectory_digest == run.trajectory.digest
         # Manifest is deterministic and self-consistent.
         manifest = build_agent_manifest(loaded)
         assert manifest["run_id"] == "api-run-1"

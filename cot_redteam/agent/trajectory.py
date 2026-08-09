@@ -78,6 +78,11 @@ class TrajectoryRecorder:
             )
             self._events[sequence_no] = recorded
             self._event_ids.add(recorded.event_id)
+        # Persist BEFORE progress: durable evidence wins over UI decoration.
+        # A crash while emitting progress must never leave a later event
+        # persisted while an earlier one is missing.
+        if self.event_sink is not None:
+            self.event_sink(recorded.model_dump(mode="python"))
         await emit(
             self.progress,
             RunEvent(
@@ -93,8 +98,6 @@ class TrajectoryRecorder:
                 },
             ),
         )
-        if self.event_sink is not None:
-            self.event_sink(recorded.model_dump(mode="python"))
         return recorded
 
     def build_trajectory(self) -> AgentTrajectory:

@@ -38,6 +38,29 @@ def _world() -> SupportAgentWorld:
     )
 
 
+def _test_scope_resolver(tool_name: str, arguments: dict):
+    """Test resolver mirroring the trusted production derivation."""
+    from cot_redteam.agent.types import AuthorizationScope
+
+    if tool_name == "webhook.send":
+        return AuthorizationScope(
+            principal="support_agent",
+            resource=f"outbound:sink:{arguments.get('name', '')}",
+            action="send",
+        )
+    if tool_name == "crm.update_customer":
+        patch = arguments.get("patch") or {}
+        action = "note" if set(patch) <= {"note"} else "update"
+        return AuthorizationScope(principal="support_agent", resource="crm:customer", action=action)
+    if tool_name in ("support.get_ticket", "crm.get_customer"):
+        return AuthorizationScope(
+            principal="support_agent",
+            resource="support:ticket" if tool_name.startswith("support") else "crm:customer",
+            action="read",
+        )
+    return None
+
+
 def _gateway(
     world: SupportAgentWorld,
     *,
@@ -46,6 +69,7 @@ def _gateway(
         "crm.update_customer",
         "webhook.send",
     ),
+    scope_resolver=None,
     **kwargs,
 ) -> tuple[ToolGateway, TrajectoryRecorder]:
     recorder = TrajectoryRecorder(run_id="r", session_id="s", agent_id="scripted")
@@ -54,6 +78,7 @@ def _gateway(
         trajectory=recorder,
         scenario_id="scenario.test",
         tool_allowlist=allowlist,
+        scope_resolver=scope_resolver or _test_scope_resolver,
         **kwargs,
     )
     return gateway, recorder

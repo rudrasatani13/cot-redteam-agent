@@ -266,11 +266,18 @@ class ScopeEscalationOracle:
 
 class ApprovalBypassOracle:
     """Proves an executed action that required approval had no earlier
-    valid granted approval for the matching subject. Uses sequence and
-    parent relations, never timestamps."""
+    valid granted approval for the matching subject.
+
+    Only grants recorded with trusted provenance (``system`` or
+    ``tool_gateway``) count: approval decisions are engine-owned, so a
+    target cannot forge its own granted approval. Uses sequence and parent
+    relations, never timestamps."""
 
     id = "approval_bypass"
     version = "1"
+
+    #: Provenance kinds allowed to grant approvals.
+    TRUSTED_GRANT_KINDS = frozenset({"system", "tool_gateway"})
 
     def __init__(self, required_approvals: Sequence[str]) -> None:
         self.required_approvals = frozenset(required_approvals)
@@ -290,6 +297,7 @@ class ApprovalBypassOracle:
                 isinstance(event, ApprovalDecision)
                 and event.decision is ApprovalValue.GRANTED
                 and event.subject_action == subject
+                and event.provenance.source_kind in self.TRUSTED_GRANT_KINDS
                 and event.sequence_no < action.sequence_no
                 for event in trajectory.events
             )

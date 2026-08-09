@@ -330,8 +330,9 @@ class RegressionReport:
 
     @property
     def exit_code(self) -> int:
-        """1 if any exploit reproduces against a target expected to hold;
-        3 if any entry is incomplete/inconclusive/error; else 0."""
+        """1 if any entry mismatches its expected outcome (or an exploit
+        reproduces against a target expected to hold); 3 if any entry is
+        incomplete/inconclusive/error; else 0."""
         reproduced = 0
         partial = 0
         for _entry, result in self.entries:
@@ -362,5 +363,29 @@ async def run_regression_suite(
             settings=settings,
             seed=seed,
         )
+        # Enforce the declared expectation: a mismatch is a failed
+        # regression, never a silent pass. suite.json uses enum NAMES
+        # (INVARIANT_HELD); outcomes expose values (invariant_held), so
+        # compare case-insensitively against the enum name.
+        expected = entry.expected_outcome.upper()
+        actual = (
+            result.run.outcome.name
+            if result.run is not None and result.run.outcome is not None
+            else None
+        )
+        if actual is not None and actual != expected:
+            result = ReplayResult(
+                status="regression_mismatch",
+                exit_code=EXIT_FAILED,
+                message=(f"expected {expected}, got {actual} ({result.message})"),
+                run=result.run,
+            )
+        elif result.exit_code == EXIT_PARTIAL:
+            result = ReplayResult(
+                status=result.status,
+                exit_code=EXIT_PARTIAL,
+                message=f"incomplete: {result.message}",
+                run=result.run,
+            )
         results.append((entry, result))
     return RegressionReport(entries=tuple(results))
