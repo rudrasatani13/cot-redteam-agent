@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from cot_redteam.benchmark.canary import generate_canary
-from cot_redteam.benchmark.conversation import ConversationRunner
+from cot_redteam.benchmark.conversation import (
+    ConversationRunner,
+    internal_error_transcript,
+)
 from cot_redteam.benchmark.judge import JudgeRequest, run_judge
 from cot_redteam.benchmark.planner import BenchmarkPlan, PlannedTrial
 from cot_redteam.benchmark.preparation import prepare_trial
@@ -20,6 +23,7 @@ from cot_redteam.benchmark.scoring import (
 )
 from cot_redteam.core.config import AppConfig
 from cot_redteam.core.errors import ConfigurationError
+from cot_redteam.core.invocation import InvocationService
 from cot_redteam.core.types import ModelRef, TokenUsage
 from cot_redteam.eval.budgets import BudgetTracker
 from cot_redteam.providers.factory import ProviderFactory
@@ -36,10 +40,17 @@ class BenchmarkEngine:
         config: AppConfig,
         factory: ProviderFactory,
         budget: BudgetTracker,
+        *,
+        invocation_service: InvocationService | None = None,
     ) -> None:
         self.config = config
         self.factory = factory
         self.budget = budget
+        self.invocation_service = invocation_service or InvocationService(
+            config,
+            provider_factory=factory,
+            budget=budget,
+        )
         self._global = asyncio.Semaphore(config.global_.concurrency)
         self._provider_semaphores: dict[str, asyncio.Semaphore] = {}
 
@@ -113,6 +124,7 @@ class BenchmarkEngine:
                             judge_model,
                             self.budget,
                             estimate_cost=self._estimate_cost,
+                            invocation_service=self.invocation_service,
                         )
                     )
         return tuple(results)
@@ -135,6 +147,7 @@ class BenchmarkEngine:
             transcript = await ConversationRunner(
                 self.budget,
                 estimate_cost=self._estimate_cost,
+                invocation_service=self.invocation_service,
             ).run(
                 trial,
                 provider,
@@ -173,6 +186,27 @@ class BenchmarkEngine:
             judge_results=judges,
         )
 
+    async def _run_trial_safe(self, trial: PlannedTrial) -> BenchmarkTrialResult:
+        """Boundary that converts unexpected trial exceptions into typed
+        internal-error evidence instead of aborting the whole run."""
+        try:
+            return await self._run_trial(trial)
+        except Exception as exc:  # noqa: BLE001 - isolate unexpected trial failures
+            return BenchmarkTrialResult(
+                trial=trial,
+                transcript=internal_error_transcript(trial.trial_id, str(exc)[:2000]),
+                scoring=TranscriptScoring(trial_id=trial.trial_id, outcomes=()),
+                canary_metadata={},
+                transformation_digest="",
+                judge_results=(),
+            )
+
     async def run(self, plan: BenchmarkPlan) -> BenchmarkExecution:
-        tasks = [asyncio.create_task(self._run_trial(trial)) for trial in plan.trials]
-        return BenchmarkExecution(results=tuple(await asyncio.gather(*tasks)))
+        tasks = [asyncio.create_task(self._run_trial_safe(trial)) for trial in plan.trials]
+        typed_results: list[BenchmarkTrialResult] = []
+        for result in await asyncio.gather(*tasks, return_exceptions=True):
+            if isinstance(result, BaseException):
+                # Cancellation or similar; surface it rather than dropping.
+                raise result
+            typed_results.append(result)
+        return BenchmarkExecution(results=tuple(typed_results))

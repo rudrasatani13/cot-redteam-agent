@@ -28,6 +28,28 @@ jobs:
         run: |
           python -m pytest --cov=cot_redteam --cov-report=term-missing --cov-report=json
           python scripts/check_critical_coverage.py coverage.json
+      - name: Offline agent scan / replay / regression
+        run: |
+          # Commands intentionally exit 1 (exploit found/reproduced); capture
+          # and assert instead of letting `bash -e` abort the step.
+          set +e
+          SMOKE="$(mktemp -d)"
+          cp cot_redteam/data/agent_security.example.yaml "$SMOKE/agent.yaml"
+          mkdir -p "$SMOKE/security_regressions"
+          cp tests/fixtures/security_regressions/* "$SMOKE/security_regressions/"
+          cd "$SMOKE"
+          # A vulnerable fixture proves an exploit: expect exit 1.
+          cot-redteam agent scan --config agent.yaml >/tmp/scan.out 2>&1
+          SCAN=$?
+          if [ "$SCAN" -ne 1 ]; then echo "agent scan expected exit 1, got $SCAN"; cat /tmp/scan.out; exit 1; fi
+          # Exact replay of a known-vulnerable fixture must reproduce: exit 1.
+          cot-redteam replay security_regressions/exploit-indirect-injection.json >/tmp/replay.out 2>&1
+          REPLAY=$?
+          if [ "$REPLAY" -ne 1 ]; then echo "replay expected exit 1, got $REPLAY"; cat /tmp/replay.out; exit 1; fi
+          # Patched regression target must hold: exit 0.
+          cot-redteam regress --suite security_regressions >/tmp/regress.out 2>&1
+          REGRESS=$?
+          if [ "$REGRESS" -ne 0 ]; then echo "regress expected exit 0, got $REGRESS"; cat /tmp/regress.out; exit 1; fi
       - name: Build
         run: python -m build
 
@@ -95,4 +117,26 @@ jobs:
               "system_canary_bank.jsonl"
           ).is_file()
           print("wheel payload bank ok", len(bank))
+          assert files("cot_redteam.data").joinpath(
+              "agent_security.example.yaml"
+          ).is_file()
+          print("wheel agent example config ok")
           PY
+          # Offline agent flow from the installed wheel (no credentials).
+          # Commands intentionally exit 1 (exploit found/reproduced); assert
+          # the exit codes instead of letting `bash -e` abort.
+          set +e
+          mkdir -p "$SMOKE/security_regressions"
+          cp "$GITHUB_WORKSPACE"/tests/fixtures/security_regressions/* "$SMOKE/security_regressions/"
+          cp "$GITHUB_WORKSPACE"/cot_redteam/data/agent_security.example.yaml "$SMOKE/agent.yaml"
+          cd "$SMOKE"
+          cot-redteam agent scan --config agent.yaml >/tmp/wheel-scan.out 2>&1
+          SCAN=$?
+          if [ "$SCAN" -ne 1 ]; then echo "wheel agent scan expected exit 1, got $SCAN"; cat /tmp/wheel-scan.out; exit 1; fi
+          cot-redteam replay security_regressions/exploit-indirect-injection.json >/tmp/wheel-replay.out 2>&1
+          REPLAY=$?
+          if [ "$REPLAY" -ne 1 ]; then echo "wheel replay expected exit 1, got $REPLAY"; cat /tmp/wheel-replay.out; exit 1; fi
+          cot-redteam regress --suite security_regressions >/tmp/wheel-regress.out 2>&1
+          REGRESS=$?
+          if [ "$REGRESS" -ne 0 ]; then echo "wheel regress expected exit 0, got $REGRESS"; cat /tmp/wheel-regress.out; exit 1; fi
+          echo "wheel offline agent flow ok"

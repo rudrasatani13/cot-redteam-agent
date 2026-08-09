@@ -10,8 +10,13 @@ from cot_redteam.benchmark.results import BenchmarkTrialResult
 from cot_redteam.benchmark.scoring import EvidenceChannel, ScorerOutcome, TranscriptScoring
 from cot_redteam.core.config import EvaluationSettings
 from cot_redteam.core.types import Message, ModelResponse, ReasoningSource
+from cot_redteam.eval.retention import redact_sensitive_values
 
 _REDACTED = "[redacted]"
+
+
+def cast_str(value: object) -> str:
+    return str(value)
 
 
 def _redact_message(message: Message) -> Message:
@@ -91,15 +96,13 @@ def sanitize_trial_result(
             if judge.outcome.channel is EvidenceChannel.FINAL
             else settings.retain_reasoning
         )
+        raw_input = judge.raw_input if settings.retain_prompts and retain_subject else _REDACTED
+        raw_output = judge.raw_output if settings.retain_responses and retain_subject else None
         judges.append(
             JudgeResult(
                 outcome=_sanitize_outcome(judge.outcome, settings),
-                raw_input=(
-                    judge.raw_input if settings.retain_prompts and retain_subject else _REDACTED
-                ),
-                raw_output=(
-                    judge.raw_output if settings.retain_responses and retain_subject else None
-                ),
+                raw_input=cast_str(redact_sensitive_values(raw_input)),
+                raw_output=cast_str(redact_sensitive_values(raw_output)) if raw_output else None,
             )
         )
     return replace(

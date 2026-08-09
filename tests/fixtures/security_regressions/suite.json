@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "artifact": "exploit-indirect-injection.json",
+      "target": "patched",
+      "expected": "INVARIANT_HELD"
+    }
+  ]
+}

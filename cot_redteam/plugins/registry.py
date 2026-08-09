@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from cot_redteam.core.errors import PluginError
 from cot_redteam.core.types import JsonValue
+
+if TYPE_CHECKING:
+    from cot_redteam.core.invocation import InvocationService
 
 T = TypeVar("T")
 
@@ -26,6 +29,11 @@ class PluginMetadata:
 @dataclass(frozen=True)
 class PluginContext:
     provider_resolver: ProviderResolver | None = None
+    #: Optional shared model-invocation boundary. Built-in provider-backed
+    #: plugins use it when supplied; v0.5 plugins keep using
+    #: ``provider_resolver`` unchanged. ``None`` for third-party plugins
+    #: compiled against older versions.
+    invocation_service: InvocationService | None = None
 
 
 class Registry(Generic[T]):

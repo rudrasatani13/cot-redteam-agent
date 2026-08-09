@@ -66,3 +66,39 @@ def test_benchmark_retention_redacts_judge_subject_and_explanation(tmp_path) -> 
     assert cleaned.judge_results[0].raw_input == "[redacted]"
     assert cleaned.judge_results[0].raw_output is None
     assert cleaned.judge_results[0].outcome.explanation == "[redacted]"
+
+
+def test_benchmark_retention_redacts_sensitive_keys_in_judge_io(tmp_path) -> None:
+    from cot_redteam.benchmark.scoring import EvidenceChannel, ScorerOutcome, ScorerVerdict
+
+    result = benchmark_trial_result(tmp_path)
+    judge = JudgeResult(
+        outcome=ScorerOutcome(
+            scorer_id="judge.test",
+            scorer_version="1.0.0",
+            channel=EvidenceChannel.FINAL,
+            verdict=ScorerVerdict.SUCCESS,
+            score=1.0,
+            eligible=True,
+            explanation="ok",
+        ),
+        raw_input='{"api_key": "k-secret", "subject": "hello"}',
+        raw_output='{"authorization": "Bearer tok", "explanation": "clean"}',
+    )
+    result = replace(result, judge_results=(judge,))
+    settings = EvaluationSettings(
+        models=["gateway:model"],
+        attacks=[],
+        monitors=[],
+        retain_prompts=True,
+        retain_responses=True,
+        retain_reasoning=True,
+    )
+
+    cleaned = sanitize_trial_result(result, settings)
+
+    assert "k-secret" not in cleaned.judge_results[0].raw_input
+    assert '"api_key"' in cleaned.judge_results[0].raw_input
+    assert '"authorization"' in cleaned.judge_results[0].raw_output
+    assert "tok" not in cleaned.judge_results[0].raw_output
+    assert "Bearer" not in cleaned.judge_results[0].raw_output

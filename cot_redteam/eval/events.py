@@ -17,6 +17,9 @@ class RunEventKind(str, Enum):
     ATTEMPT_FINISHED = "attempt_finished"
     ITEM_FINISHED = "item_finished"
     RUN_FINISHED = "run_finished"
+    INVOCATION_STARTED = "invocation_started"
+    INVOCATION_FINISHED = "invocation_finished"
+    INVOCATION_FAILED = "invocation_failed"
     ACTIVITY = "activity"
 
 

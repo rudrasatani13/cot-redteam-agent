@@ -35,4 +35,5 @@ def test_v2_migration_is_idempotent(tmp_path: Path) -> None:
                 "SELECT version FROM schema_migrations ORDER BY version"
             )
         ]
-    assert versions == [1, 2]
+    # Migration 3 (agent tables) is additive; reopening stays idempotent.
+    assert versions == [1, 2, 3]

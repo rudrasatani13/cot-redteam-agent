@@ -2,13 +2,16 @@
 
 ## Supported versions
 
-Security fixes are provided for the latest `0.3.x` release and may be applied
-to the unreleased default branch before the next patch release. Version
-`0.1.x` is unsupported.
+Security fixes are provided for the latest `0.6.x` release and may be
+applied to the unreleased default branch before the next patch release.
+Version `0.1.x` is unsupported.
 
 | Version | Supported |
 |---|---|
-| Latest `0.3.x` | Yes |
+| Latest `0.6.x` | Yes |
+| `0.5.x` | Best-effort (upstream fixes only) |
+| `0.4.x` | No |
+| `0.3.x` | No |
 | `0.2.x` | No |
 | `0.1.x` | No |
 
@@ -52,6 +55,12 @@ boundaries.
   output, logs, SQLite records, reports, manifests, or artifacts.
 - Dataset and artifact paths must not escape intended user-selected locations
   through unsafe path interpretation.
+- Artifact writes are validated before any file creation: absolute paths
+  (POSIX and Windows drive/UNC forms), `..` traversal segments, control
+  characters, symlink components on the write path, and symlink destinations
+  are rejected, and every destination resolves strictly inside the configured
+  artifact root. A separate hostile local OS user racing directory entries
+  after validation is out of scope.
 - Generated attack specifications are data and must never be evaluated as
   Python or shell code.
 - Imported benchmark rows are untrusted data. Importers must never execute

@@ -78,6 +78,48 @@ class BudgetSettings(StrictModel):
     max_estimated_cost: float | None = Field(default=None, ge=0)
 
 
+DEFAULT_FIXTURES: list[Literal["vulnerable", "patched", "clean"]] = ["vulnerable"]
+
+
+class AgentRetentionSettings(StrictModel):
+    """Privacy-first agent retention defaults."""
+
+    retain_final_response: bool = False
+    retain_tool_arguments: bool = False
+    retain_tool_results: bool = False
+    retain_memory_values: bool = False
+    retain_world_values: bool = False
+    retain_model_reasoning: bool = False
+
+
+class AgentSecuritySettings(StrictModel):
+    """Strict optional v0.6 agent-security configuration."""
+
+    scenarios: list[str] = Field(default_factory=list)
+    fixtures: list[Literal["vulnerable", "patched", "clean"]] = Field(
+        default_factory=lambda: list(DEFAULT_FIXTURES)
+    )
+    target: Literal["scripted", "provider_adapter"] = "scripted"
+    budgets: BudgetSettings = Field(default_factory=BudgetSettings)
+    retention: AgentRetentionSettings = Field(default_factory=AgentRetentionSettings)
+    max_actions: int = Field(default=100, ge=1)
+    max_serialized_argument_bytes: int = Field(default=8192, ge=1)
+    max_serialized_result_bytes: int = Field(default=65536, ge=1)
+    tool_timeout_seconds: float = Field(default=5.0, gt=0)
+    max_concurrent_tool_calls: int = Field(default=4, ge=1)
+    output_dir: str = "./results/agent"
+    target_model: str | None = None
+    system_prompt: str | None = None
+
+    @model_validator(mode="after")
+    def _provider_adapter_requires_target_model(self) -> AgentSecuritySettings:
+        if self.target == "provider_adapter" and not self.target_model:
+            raise ValueError(
+                "agent target=provider_adapter requires target_model (e.g. mock:mock-model)"
+            )
+        return self
+
+
 class EvaluationSettings(StrictModel):
     models: list[str] = Field(default_factory=list)
     attacks: list[str] = Field(default_factory=list)
@@ -170,6 +212,10 @@ class AppConfig(StrictModel):
     storage: StorageSettings = Field(default_factory=StorageSettings)
     reporting: ReportingSettings = Field(default_factory=ReportingSettings)
     generative: GenerativeSettings = Field(default_factory=GenerativeSettings)
+    #: Optional v0.6 agent settings. Absent configs validate and run exactly
+    #: as before; the agent CLI requires this section or a dedicated agent
+    #: example config.
+    agent: AgentSecuritySettings | None = None
 
     @model_validator(mode="after")
     def _providers_non_empty(self) -> AppConfig:
@@ -260,6 +306,8 @@ DOCUMENTED_OVERRIDES = {
     "artifacts.root",
     "reporting.output_dir",
     "reporting.formats",
+    "agent.scenarios",
+    "agent.fixtures",
 }
 
 
@@ -307,6 +355,12 @@ def _resolve_runtime_paths(config: AppConfig, config_path: Path) -> AppConfig:
     reporting_dir = str(resolve_path_against_config(config.reporting.output_dir, config_path))
     archive = str(resolve_path_against_config(config.generative.archive_path, config_path))
     output_dir = str(resolve_path_against_config(config.global_.output_dir, config_path))
+    agent_settings = config.agent
+    if agent_settings is not None and getattr(agent_settings, "output_dir", None):
+        agent_output = str(
+            resolve_path_against_config(agent_settings.output_dir, config_path)  # type: ignore[attr-defined]
+        )
+        agent_settings = agent_settings.model_copy(update={"output_dir": agent_output})  # type: ignore[union-attr]
     return config.model_copy(
         update={
             "global_": config.global_.model_copy(update={"output_dir": output_dir}),
@@ -317,6 +371,7 @@ def _resolve_runtime_paths(config: AppConfig, config_path: Path) -> AppConfig:
             "artifacts": config.artifacts.model_copy(update={"root": artifacts_root}),
             "reporting": config.reporting.model_copy(update={"output_dir": reporting_dir}),
             "generative": config.generative.model_copy(update={"archive_path": archive}),
+            "agent": agent_settings,
         }
     )
 

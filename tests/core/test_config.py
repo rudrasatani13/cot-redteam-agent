@@ -10,6 +10,7 @@ import yaml
 from cot_redteam.core.config import (
     EvaluationSettings,
     ProviderSettings,
+    config_digest,
     load_config,
     redacted_config,
     resolve_provider,
@@ -300,3 +301,66 @@ def test_benchmark_repetitions_require_positive_value() -> None:
         EvaluationSettings.model_validate(
             {**config.evaluation.model_dump(mode="python"), "repetitions": 0}
         )
+
+
+def test_agent_section_is_optional_and_absent_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Existing v0.5 configs without an agent section validate unchanged."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    config = load_config(FIXTURES / "config" / "minimal.yaml")
+    assert config.agent is None
+    digest_before = config_digest(config)
+    # Loading the same file again yields an identical config digest.
+    config_again = load_config(FIXTURES / "config" / "minimal.yaml")
+    assert config_digest(config_again) == digest_before
+
+
+def test_agent_section_coerced_to_strict_settings() -> None:
+    from cot_redteam.core.config import AppConfig
+
+    config = AppConfig.model_validate(
+        {
+            "providers": {"mock": {"kind": "mock"}},
+            "evaluation": {"models": ["mock:m"]},
+            "agent": {
+                "scenarios": ["support.indirect_prompt_injection.v1"],
+                "fixtures": ["vulnerable", "patched", "clean"],
+            },
+        }
+    )
+    assert config.agent is not None
+    assert config.agent.scenarios == ["support.indirect_prompt_injection.v1"]
+    assert config.agent.fixtures == ["vulnerable", "patched", "clean"]
+    # Privacy-first retention defaults.
+    assert config.agent.retention.retain_tool_arguments is False
+    assert config.agent.retention.retain_final_response is False
+
+
+def test_agent_section_rejects_unknown_keys() -> None:
+    from cot_redteam.core.config import AppConfig
+
+    with pytest.raises(ValueError, match="unexpected|extra"):
+        AppConfig.model_validate(
+            {
+                "providers": {"mock": {"kind": "mock"}},
+                "evaluation": {"models": ["mock:m"]},
+                "agent": {"not_a_real_option": True},
+            }
+        )
+
+
+def test_agent_config_digest_changes_when_agent_section_present() -> None:
+    from cot_redteam.core.config import AppConfig, config_digest
+
+    base = AppConfig.model_validate(
+        {"providers": {"mock": {"kind": "mock"}}, "evaluation": {"models": ["mock:m"]}}
+    )
+    with_agent = AppConfig.model_validate(
+        {
+            "providers": {"mock": {"kind": "mock"}},
+            "evaluation": {"models": ["mock:m"]},
+            "agent": {"scenarios": ["support.approval_bypass.v1"]},
+        }
+    )
+    assert config_digest(base) != config_digest(with_agent)

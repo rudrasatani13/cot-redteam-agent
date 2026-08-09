@@ -1,10 +1,10 @@
-# Release checklist — 0.5.0
+# Release checklist — 0.6.0
 
 ## Repository state
 
 - [ ] Release commit is on the intended branch and the worktree is clean.
-- [ ] Version is `0.5.0` in package metadata and changelog.
-- [ ] No tag or GitHub Release named `v0.5.0` already exists.
+- [ ] Version is `0.6.0` in package metadata and changelog.
+- [ ] No tag or GitHub Release named `v0.6.0` already exists.
 - [ ] Diff contains no credentials, private datasets, provider responses,
       databases, reports, artifacts, caches, or build output.
 - [ ] `SECURITY.md`, `SUPPORT.md`, `CONTRIBUTING.md`, and community templates
@@ -29,8 +29,7 @@
 
 ## GitHub verification
 
-- [ ] Push `codex/v0.3-benchmark`.
-- [ ] Open a pull request into `main`.
+- [ ] Push the release branch and open a pull request into `main`.
 - [ ] Python 3.10, 3.11, 3.12, and 3.13 jobs pass.
 - [ ] Primary formatting, lint, typing, coverage, and build jobs pass.
 - [ ] Wheel smoke job passes.
@@ -42,13 +41,14 @@
 - [ ] Change repository visibility to public.
 - [ ] Enable GitHub private vulnerability reporting.
 - [ ] Verify README, issue-template, support, and security links publicly.
-- [ ] Create annotated tag `v0.5.0` from the merged `main` commit.
+- [ ] Create annotated tag `v0.6.0` from the merged `main` commit.
 - [ ] Build wheel and sdist from that exact commit.
-- [ ] Publish GitHub Release `v0.5.0` with changelog-derived notes.
-- [ ] Attach `cot_redteam_agent-0.5.0-py3-none-any.whl`.
-- [ ] Attach `cot_redteam_agent-0.5.0.tar.gz`.
+- [ ] Publish GitHub Release `v0.6.0` with changelog-derived notes.
+- [ ] Attach `cot_redteam_agent-0.6.0-py3-none-any.whl`.
+- [ ] Attach `cot_redteam_agent-0.6.0.tar.gz`.
 - [ ] Verify release-asset checksums and clean installation.
-- [ ] Confirm documentation does not claim PyPI publication.
+- [ ] Confirm documentation states the current PyPI publication status
+      accurately (the project publishes to PyPI; do not claim otherwise).
 
 ## Acceptance criteria
 
@@ -67,3 +67,6 @@
 | 11 | Accurate public docs and community guidance | Documentation tests and review |
 | 12 | Wheel loads 12-scenario smoke and 56-scenario core suites | Wheel smoke |
 | 13 | Benchmark errors never count as secure outcomes | Scorer and report tests |
+| 14 | Offline agent scan / replay / regression flow passes from the installed wheel | Wheel smoke |
+| 15 | Vulnerable/patched/clean scenario matrix deterministic (exploit/held/held) | Agent engine tests |
+| 16 | Replay checksums reject corrupt artifacts (exit 2) | Replay tests |

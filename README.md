@@ -262,6 +262,41 @@ Model-safety results belong in normal research reports or issues. Suspected
 software vulnerabilities in this repository must be reported privately under
 the [security policy](SECURITY.md).
 
+## Agent security (v0.6 Proof-of-Action)
+
+v0.6 adds an agent execution lane that evaluates *agent behavior*, not just
+model text. Impact is proven only by observed simulated actions and
+deterministic world state transitions — assistant prose, model reasoning,
+and LLM judge opinion are never proof of impact.
+
+- **Support Agent World** — the only executable simulated world: in-memory
+  tickets, CRM records, canaries, outbound sink, approval state, and
+  protected state. No tool performs real network, shell, filesystem,
+  subprocess, or external database effects.
+- **Deny-by-default `ToolGateway`** — registry membership, scenario sandbox
+  allowlist, schema validation, byte/action/time/concurrency limits, and
+  structured trajectory events for every dispatch.
+- **Deterministic oracles** — canary-reached-sink, unauthorized-tool-call,
+  approval-bypass, and protected-state-mutation proofs over immutable
+  pre/post world snapshots. Oracle failures are never clean.
+- **Three scenarios** with vulnerable/patched/clean fixtures: indirect
+  prompt injection, tool-result injection, approval bypass.
+- **Replay artifacts** — verified exploits save as strict checksummed JSON;
+  exact replay reproduces them, and regression suites replay saved exploits
+  against patched targets expected to hold.
+
+```bash
+cot-redteam agent scan --config cot_redteam/data/agent_security.example.yaml
+cot-redteam replay artifacts/<run_id>/replay.json     # exit 1 = reproduced
+cot-redteam regress --suite security-regressions/     # patched target holds
+```
+
+The v0.6 path runs fully offline with the keyless `mock` provider plus
+scripted targets and local SQLite/artifacts. Agent retention defaults to
+omitting raw tool arguments/results, memory values, and final-response
+content; structural evidence (events, digests, oracle verdicts) is always
+kept.
+
 ## Python API
 
 ```python
@@ -297,9 +332,13 @@ Use `run_evaluation` for the backward-compatible `0.2` attack/monitor path and
 - `cot-redteam race` — race one probe across models and compare compliance
 - `cot-redteam list-runs|show-run|report`
 - `cot-redteam evolve`
+- `cot-redteam agent scan --config` — scripted agent scenarios; saves replay artifacts for verified exploits
+- `cot-redteam replay EXPLOIT.json` — deterministic local replay of a saved exploit
+- `cot-redteam regress --suite DIR` — replay saved exploits against patched targets expected to hold
 
-Exit codes are `0` for completed, `1` for failed, `2` for configuration errors,
-and `3` for partial runs.
+Exit codes are `0` for completed, `1` for failed/findings (a reproduced
+exploit), `2` for configuration errors (including corrupt/incompatible
+replay artifacts), and `3` for partial/inconclusive runs.
 
 ## Documentation
 

@@ -1,6 +1,6 @@
 """CoT Red Teaming Agent — Automated CoT Red Teaming Framework."""
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 from cot_redteam.core.errors import (
     BudgetExceededError,

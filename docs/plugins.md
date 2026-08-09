@@ -1,6 +1,14 @@
 # Plugins
 
-Third-party plugins run **in-process** and are trusted code. 0.2 does not sandbox plugins.
+Third-party plugins run **in-process** and are trusted code. The project does
+not sandbox plugins: an installed plugin can execute arbitrary Python,
+filesystem, shell, or network operations inside the host process. This is the
+documented plugin contract; install only plugins you trust. Core security
+guarantees apply to core and built-in paths and to plugins that use the
+provided context services — never assume a malicious plugin is contained.
+The v0.6 Support Agent World tools and the simulated tool gateway do not
+sandbox plugins or models; they only constrain the simulated actions of the
+agent under test.
 
 ## Attack contract
 
