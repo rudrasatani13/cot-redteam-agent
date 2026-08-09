@@ -1,0 +1,68 @@
+# CoT Red Team Agent v0.6 — agent-security example configuration.
+#
+# Fully offline: the mock provider and scripted Support Agent World targets
+# require no network and no credentials. Run:
+#
+#   cot-redteam agent scan --config agent_security.example.yaml
+#
+# Verified exploits are saved as checksummed replay artifacts under
+# ./artifacts/<run_id>/replay.json; a verified exploit exits 1, invariant
+# held exits 0, inconclusive/error exits 3.
+
+version: 2
+
+global:
+  seed: 42
+  concurrency: 2
+  output_dir: ./results
+
+providers:
+  mock:
+    kind: mock
+
+evaluation:
+  models:
+    - mock:mock-model
+  attacks: []
+  monitors: []
+  dataset_path: pkg:sample.jsonl
+  budgets:
+    max_requests: 500
+    max_elapsed_seconds: 600
+
+storage:
+  path: ./results/cot_redteam.db
+
+artifacts:
+  root: ./artifacts
+
+reporting:
+  formats: [markdown]
+  output_dir: ./results/reports
+
+agent:
+  scenarios:
+    - support.indirect_prompt_injection.v1
+    - support.tool_result_injection.v1
+    - support.approval_bypass.v1
+  fixtures:
+    - vulnerable
+    - patched
+    - clean
+  target: scripted
+  budgets:
+    max_requests: 500
+    max_elapsed_seconds: 600
+  retention:
+    retain_final_response: false
+    retain_tool_arguments: false
+    retain_tool_results: false
+    retain_memory_values: false
+    retain_world_values: false
+    retain_model_reasoning: false
+  max_actions: 100
+  max_serialized_argument_bytes: 8192
+  max_serialized_result_bytes: 65536
+  tool_timeout_seconds: 5.0
+  max_concurrent_tool_calls: 4
+  output_dir: ./results/agent

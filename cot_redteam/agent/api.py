@@ -2,22 +2,28 @@
 
 from __future__ import annotations
 
+import json
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from cot_redteam.agent.config import AgentSecuritySettings
 from cot_redteam.agent.engine import AgentExecutionEngine
+from cot_redteam.agent.replay import build_replay_artifact
 from cot_redteam.agent.scenarios.support import (
+    SUPPORT_SCENARIOS,
     support_fixture,
     support_scenario,
 )
 from cot_redteam.agent.targets.scripted import ScriptedTarget
-from cot_redteam.agent.types import AgentRun
+from cot_redteam.agent.types import AgentOutcome, AgentRun
 from cot_redteam.agent.worlds.support import SupportAgentWorld
 from cot_redteam.core.config import AppConfig
+from cot_redteam.core.errors import ConfigurationError
 from cot_redteam.core.invocation import InvocationService
 from cot_redteam.eval.budgets import BudgetTracker
 from cot_redteam.eval.events import ProgressCallback
+from cot_redteam.storage.artifacts import ArtifactStore
 from cot_redteam.storage.sqlite import SQLiteRunStore
 
 
@@ -90,3 +96,106 @@ async def run_agent_scenario(
     finally:
         await target.aclose()
     return run
+
+
+def save_replay_artifact(
+    run: AgentRun,
+    *,
+    fixture: Any,
+    settings: AgentSecuritySettings,
+    artifact_store: ArtifactStore,
+    run_store: SQLiteRunStore | None = None,
+) -> tuple[str, str] | None:
+    """Persist a checksummed replay artifact for verified-exploit runs.
+
+    Returns (absolute_path, sha256) or None for non-exploit outcomes. Only
+    verified exploits are saved; the run is never replayed from prose.
+    """
+    if run.outcome is not AgentOutcome.VERIFIED_EXPLOIT:
+        return None
+    artifact = build_replay_artifact(
+        run,
+        fixture=fixture,
+        budget_configuration=settings.budgets.model_dump(mode="python"),
+    )
+    body = json.dumps(artifact, indent=2, sort_keys=True)
+    write = artifact_store.write_text(
+        f"{run.run_id}/replay.json",
+        body,
+        media_type="application/json",
+    )
+    artifact_store.write_text(
+        f"{run.run_id}/replay.json.sha256",
+        f"{write.record.sha256}  replay.json\n",
+        media_type="text/plain",
+    )
+    if run_store is not None:
+        run_store.save_replay_record(
+            replay_id=artifact["replay_id"],
+            original_run_id=run.run_id,
+            schema_version=int(artifact["schema_version"]),
+            relative_path=f"{run.run_id}/replay.json",
+            sha256=write.record.sha256,
+            byte_length=write.record.byte_length,
+            world_fixture_digest=artifact["world_fixture_digest"],
+            trajectory_digest=artifact["trajectory_digest"],
+            metadata={"scenario_id": run.scenario_ref.id, "target_family": fixture.fixture},
+        )
+    return str(write.absolute_path), write.record.sha256
+
+
+@dataclass(frozen=True)
+class AgentScanResult:
+    runs: tuple[AgentRun, ...]
+    replay_paths: dict[str, tuple[str, str]]
+
+
+async def run_agent_scan(
+    config: AppConfig,
+    *,
+    run_store: SQLiteRunStore | None = None,
+    artifact_store: ArtifactStore | None = None,
+    progress: ProgressCallback | None = None,
+) -> AgentScanResult:
+    """Run the configured agent scenarios/fixtures and save replay
+    artifacts for verified exploits."""
+    settings = config.agent
+    if settings is None:
+        raise ConfigurationError("agent scan requires an 'agent' section in the config")
+    scenario_ids = settings.scenarios or list(SUPPORT_SCENARIOS)
+    fixture_names = settings.fixtures or ["vulnerable"]
+    owns_store = run_store is None
+    store = run_store or SQLiteRunStore(config.storage.path)
+    artifacts = artifact_store or ArtifactStore(config.artifacts.root)
+    service = InvocationService(
+        config,
+        budget=BudgetTracker(settings.budgets),
+    )
+    runs: list[AgentRun] = []
+    replay_paths: dict[str, tuple[str, str]] = {}
+    try:
+        for scenario_id in scenario_ids:
+            for fixture_name in fixture_names:
+                run = await run_agent_scenario(
+                    scenario_id=scenario_id,
+                    fixture=fixture_name,
+                    settings=settings,
+                    invocation_service=service,
+                    run_store=store,
+                    seed=config.global_.seed,
+                    progress=progress,
+                )
+                runs.append(run)
+                saved = save_replay_artifact(
+                    run,
+                    fixture=support_fixture(scenario_id, fixture_name),
+                    settings=settings,
+                    artifact_store=artifacts,
+                    run_store=store,
+                )
+                if saved is not None:
+                    replay_paths[run.run_id] = saved
+    finally:
+        if owns_store:
+            store.close()
+    return AgentScanResult(runs=tuple(runs), replay_paths=replay_paths)

@@ -273,6 +273,8 @@ DOCUMENTED_OVERRIDES = {
     "artifacts.root",
     "reporting.output_dir",
     "reporting.formats",
+    "agent.scenarios",
+    "agent.fixtures",
 }
 
 

@@ -153,6 +153,44 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="non-interactive Rich live dashboard (no slash commands)",
     )
+
+    agent = sub.add_parser(
+        "agent",
+        help="agent-security commands (scripted Support Agent World)",
+    )
+    agent_sub = agent.add_subparsers(dest="agent_command", required=True)
+    agent_scan = agent_sub.add_parser(
+        "scan",
+        help=(
+            "run configured agent scenarios/fixtures; save checksummed "
+            "replay artifacts for verified exploits (exit 0/1/3)"
+        ),
+    )
+    agent_scan.add_argument("--config", required=True)
+    agent_scan.add_argument("--scenario", action="append", default=None)
+    agent_scan.add_argument("--fixture", action="append", default=None)
+    agent_scan.add_argument("--seed", type=int, default=None)
+
+    replay = sub.add_parser(
+        "replay",
+        help=(
+            "replay a checksummed exploit artifact (exit 1 = reproduced, "
+            "0 = held, 3 = inconclusive, 2 = corrupt/incompatible)"
+        ),
+    )
+    replay.add_argument("artifact", help="path to EXPLOIT.json")
+    replay.add_argument("--config", default=None, help="optional agent config")
+    replay.add_argument("--fixture", default=None, help="override replayed fixture")
+
+    regress = sub.add_parser(
+        "regress",
+        help=(
+            "run a security regression suite: saved exploits replayed "
+            "against patched targets expected to hold"
+        ),
+    )
+    regress.add_argument("--suite", required=True, help="suite directory with suite.json")
+    regress.add_argument("--config", default=None, help="optional agent config")
     return parser
 
 
@@ -614,6 +652,113 @@ def cmd_tui(args: argparse.Namespace) -> int:
     )
 
 
+async def _agent_scan_async(args: argparse.Namespace) -> int:
+    from cot_redteam.agent.api import run_agent_scan
+    from cot_redteam.agent.reporting import render_agent_jsonl, render_agent_markdown
+    from cot_redteam.agent.scenarios.support import SUPPORT_SCENARIOS
+    from cot_redteam.agent.types import AgentOutcome
+    from cot_redteam.eval.manifest import build_agent_manifest
+    from cot_redteam.storage.artifacts import ArtifactStore
+
+    config = load_config(args.config)
+    if config.agent is None:
+        raise ConfigurationError(
+            "agent scan requires an 'agent' section in the config; see "
+            "cot_redteam/data/agent_security.example.yaml"
+        )
+    settings = config.agent
+    scenario_ids = args.scenario or settings.scenarios or list(SUPPORT_SCENARIOS)
+    fixtures = args.fixture or settings.fixtures
+    overrides = {}
+    if args.seed is not None:
+        overrides["global.seed"] = args.seed
+    if args.scenario or args.fixture:
+        overrides["agent.scenarios"] = scenario_ids
+        overrides["agent.fixtures"] = fixtures
+    config = load_config(args.config, overrides=overrides or None)
+
+    result = await run_agent_scan(config)
+    artifact_store = ArtifactStore(config.artifacts.root)
+    output_dir = Path(settings.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for run in result.runs:
+        manifest = build_agent_manifest(run, config=config)
+        markdown = render_agent_markdown(
+            run,
+            replay_path=(
+                result.replay_paths[run.run_id][0] if run.run_id in result.replay_paths else None
+            ),
+            replay_checksum=(
+                result.replay_paths[run.run_id][1] if run.run_id in result.replay_paths else None
+            ),
+            retention=settings.retention,
+        )
+        (output_dir / f"{run.run_id}.md").write_text(markdown, encoding="utf-8")
+        (output_dir / f"{run.run_id}.jsonl").write_text(
+            render_agent_jsonl(run, retention=settings.retention),
+            encoding="utf-8",
+        )
+        artifact_store.write_text(
+            f"{run.run_id}/manifest.json",
+            json.dumps(manifest, indent=2, sort_keys=True),
+            media_type="application/json",
+        )
+        replay = result.replay_paths.get(run.run_id)
+        replay_note = f" replay={replay[0]}" if replay else ""
+        outcome = run.outcome.value if run.outcome else "none"
+        print(f"{run.scenario_ref.id}\t{run.attack_ref.id}\t{outcome}\t{run.run_id}{replay_note}")
+    if any(run.outcome is AgentOutcome.VERIFIED_EXPLOIT for run in result.runs):
+        return EXIT_FAILED
+    if any(run.outcome in (AgentOutcome.INCONCLUSIVE, AgentOutcome.ERROR) for run in result.runs):
+        return EXIT_PARTIAL
+    return EXIT_OK
+
+
+def cmd_agent_scan(args: argparse.Namespace) -> int:
+    return asyncio.run(_agent_scan_async(args))
+
+
+async def _replay_async(args: argparse.Namespace) -> int:
+    from cot_redteam.agent.config import AgentSecuritySettings
+    from cot_redteam.agent.replay import load_replay, run_replay
+
+    artifact = load_replay(args.artifact)
+    settings = AgentSecuritySettings()
+    if args.config:
+        config = load_config(args.config)
+        if config.agent is not None:
+            settings = config.agent
+    result = await run_replay(artifact, fixture=args.fixture, settings=settings)
+    print(result.message)
+    return result.exit_code
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    return asyncio.run(_replay_async(args))
+
+
+async def _regress_async(args: argparse.Namespace) -> int:
+    from cot_redteam.agent.config import AgentSecuritySettings
+    from cot_redteam.agent.replay import run_regression_suite
+
+    settings = AgentSecuritySettings()
+    if args.config:
+        config = load_config(args.config)
+        if config.agent is not None:
+            settings = config.agent
+    report = await run_regression_suite(args.suite, settings=settings)
+    for entry, result in report.entries:
+        print(
+            f"{entry.artifact}\ttarget={entry.target_fixture}\t"
+            f"expected={entry.expected_outcome}\t{result.status}\t{result.message}"
+        )
+    return report.exit_code
+
+
+def cmd_regress(args: argparse.Namespace) -> int:
+    return asyncio.run(_regress_async(args))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -631,6 +776,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "report": cmd_report,
         "evolve": cmd_evolve,
         "race": cmd_race,
+        "agent": cmd_agent_scan,
+        "replay": cmd_replay,
+        "regress": cmd_regress,
     }
     try:
         if args.command == "config":
@@ -649,6 +797,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.dataset_command == "import":
                 return cmd_dataset_import(args)
             parser.error("unknown dataset command")
+        if args.command == "agent":
+            if args.agent_command == "scan":
+                return cmd_agent_scan(args)
+            parser.error("unknown agent command")
         handler = handlers.get(args.command)
         if handler is None:
             parser.error(f"unknown command {args.command}")
