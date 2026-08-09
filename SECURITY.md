@@ -52,6 +52,12 @@ boundaries.
   output, logs, SQLite records, reports, manifests, or artifacts.
 - Dataset and artifact paths must not escape intended user-selected locations
   through unsafe path interpretation.
+- Artifact writes are validated before any file creation: absolute paths
+  (POSIX and Windows drive/UNC forms), `..` traversal segments, control
+  characters, symlink components on the write path, and symlink destinations
+  are rejected, and every destination resolves strictly inside the configured
+  artifact root. A separate hostile local OS user racing directory entries
+  after validation is out of scope.
 - Generated attack specifications are data and must never be evaluated as
   Python or shell code.
 - Imported benchmark rows are untrusted data. Importers must never execute
