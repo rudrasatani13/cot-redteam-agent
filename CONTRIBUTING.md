@@ -63,6 +63,17 @@ repository's enforced coverage threshold.
 - Filesystem writes are atomic where partial output would be misleading.
 - Bounded retries, concurrency, request counts, token use, elapsed time, and
   estimated cost are preserved.
+- Every built-in logical model call routes through
+  `cot_redteam.core.invocation` (enforced by the AST source-guard test
+  `tests/core/test_no_direct_provider_generate.py`); do not call
+  `Provider.generate` from new production code outside provider
+  implementations and `core/invocation.py`.
+- Agent impact is proven only by structured observed actions and
+  deterministic world state transitions (`cot_redteam.agent`); model text
+  and LLM judge opinion are never proof of impact.
+- New agent tool handlers must go through the deny-by-default
+  `ToolGateway`; no simulated world tool may perform real filesystem,
+  shell, network, subprocess, or external database effects.
 
 ## Adding an attack or monitor
 

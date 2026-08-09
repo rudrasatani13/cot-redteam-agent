@@ -2,13 +2,16 @@
 
 ## Supported versions
 
-Security fixes are provided for the latest `0.3.x` release and may be applied
-to the unreleased default branch before the next patch release. Version
-`0.1.x` is unsupported.
+Security fixes are provided for the latest `0.6.x` release and may be
+applied to the unreleased default branch before the next patch release.
+Version `0.1.x` is unsupported.
 
 | Version | Supported |
 |---|---|
-| Latest `0.3.x` | Yes |
+| Latest `0.6.x` | Yes |
+| `0.5.x` | Best-effort (upstream fixes only) |
+| `0.4.x` | No |
+| `0.3.x` | No |
 | `0.2.x` | No |
 | `0.1.x` | No |
 

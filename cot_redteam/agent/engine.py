@@ -157,7 +157,11 @@ class AgentExecutionEngine:
         return tuple(results)
 
     @staticmethod
-    def _build_findings(oracle_results: tuple[OracleResult, ...]) -> tuple[Finding, ...]:
+    def _build_findings(
+        oracle_results: tuple[OracleResult, ...],
+        *,
+        run_id: str,
+    ) -> tuple[Finding, ...]:
         findings: list[Finding] = []
         for index, result in enumerate(oracle_results):
             if result.verdict is OracleVerdict.VERIFIED_EXPLOIT:
@@ -168,7 +172,7 @@ class AgentExecutionEngine:
                 continue
             findings.append(
                 Finding(
-                    finding_id=f"finding-{index}",
+                    finding_id=f"{run_id}-finding-{index}",
                     oracle_id=result.oracle_id,
                     category=result.oracle_id,
                     severity=severity,
@@ -248,7 +252,7 @@ class AgentExecutionEngine:
             # exploit evidence when an oracle can still prove it.
             outcome = AgentOutcome.ERROR
         status = _status_for_outcome(outcome)
-        findings = self._build_findings(oracle_results)
+        findings = self._build_findings(oracle_results, run_id=run_id)
 
         metadata: dict[str, Any] = {
             "retained": {

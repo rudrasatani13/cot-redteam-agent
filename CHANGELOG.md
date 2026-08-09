@@ -1,6 +1,61 @@
 # Changelog
 
+## 0.6.0 — Proof-of-Action Foundation
+
+### Added
+
+- **Agent-security path** (`cot_redteam.agent`): evaluates *agent behavior*
+  — only observed simulated actions and deterministic world state
+  transitions can prove impact; model text is evidence about model
+  behavior, never proof of agent impact.
+- **Support Agent World**: the only executable simulated world in v0.6 —
+  in-memory tickets, CRM records, canaries, outbound sink, approval state,
+  and protected state. No tool performs real network, shell, filesystem,
+  subprocess, or external database effects.
+- **Deny-by-default `ToolGateway`**: registry membership, scenario sandbox
+  allowlist, schema validation, argument/result byte limits, per-run action
+  count, per-call timeout, and concurrent-call bounds; records
+  `ToolCallRequested` → `ActionEvent` (attempted/executed, state digests,
+  requested-vs-policy-observed authorization) → `ToolResultReceived`.
+- **Deterministic oracles**: canary-reached-sink, unauthorized-tool-call,
+  scope-escalation, approval-bypass, and protected-state-mutation oracles
+  over immutable pre/post world snapshots + structured trajectories.
+  Assistant prose alone can never produce `VERIFIED_EXPLOIT`; oracle
+  failures are never clean.
+- **Three scripted scenarios** with vulnerable/patched/clean fixtures:
+  indirect prompt injection, tool-result injection, approval bypass.
+- **Replay artifacts**: strict versioned JSON with non-self-referential
+  payload checksums and detached `.sha256`; exact replay reproduces a
+  verified exploit; regression suites replay saved exploits against
+  patched targets expected to hold.
+- **CLI**: `cot-redteam agent scan --config`, `cot-redteam replay
+  EXPLOIT.json`, `cot-redteam regress --suite`.
+- **Shared `InvocationService`**: every built-in target/attacker/judge/
+  monitor-judge/generator/race logical model call is budgeted and
+  role-attributed. Unknown provider pricing is never silently treated as
+  free under a cost ceiling (typed `UnknownPricingError` before the call).
+- **Artifact root containment**: absolute paths, `..` traversal, control
+  characters, symlink components, and symlink destinations are rejected;
+  every write stays inside the pinned artifact root.
+- **Benchmark trial isolation**: unexpected trial exceptions become typed
+  `INTERNAL_ERROR` evidence; sibling trials finish; runs never abort.
+- **Retention hardening**: recursive credential-class redaction, monitor
+  `judge_response` removal when responses are not retained, and
+  storage-boundary agent retention with privacy-first defaults.
+- **Agent SQLite migration 3**: crash-safe begin/append/finalize agent run
+  persistence, append-only trajectory events, interrupted-run recovery,
+  replay records, and agent manifests.
+- **Endpoint policy primitive** (`core/network_policy.py`) for future agent
+  HTTP targets; no HTTP agent target ships in v0.6.
+
+### Security notes
+
+- Third-party plugins remain trusted in-process code and are not sandboxed.
+- Remote model calls are optional, user-funded, and budgeted; the release
+  is fully provable offline with the `mock` provider plus scripted targets.
+
 ## Unreleased
+
 
 ### Added
 

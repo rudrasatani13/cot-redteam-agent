@@ -119,3 +119,69 @@ sensitive systems. For the live dashboard, see [Interactive TUI](tui.md).
 cot-redteam config validate --config config.yaml
 cot-redteam config show --config config.yaml
 ```
+
+## Agent section (v0.6)
+
+The optional top-level `agent` section configures the agent-security path.
+Existing configs without it validate and run exactly as before; the
+`cot-redteam agent scan` command requires it. See
+`cot_redteam/data/agent_security.example.yaml`.
+
+```yaml
+agent:
+  scenarios:
+    - support.indirect_prompt_injection.v1
+    - support.tool_result_injection.v1
+    - support.approval_bypass.v1
+  fixtures: [vulnerable, patched, clean]
+  target: scripted
+  budgets:
+    max_requests: 500
+    max_elapsed_seconds: 600
+  retention:
+    retain_final_response: false
+    retain_tool_arguments: false
+    retain_tool_results: false
+    retain_memory_values: false
+    retain_world_values: false
+    retain_model_reasoning: false
+  max_actions: 100
+  max_serialized_argument_bytes: 8192
+  max_serialized_result_bytes: 65536
+  tool_timeout_seconds: 5.0
+  max_concurrent_tool_calls: 4
+  output_dir: ./results/agent
+```
+
+### Agent retention defaults
+
+Privacy-first: raw tool arguments/results, memory values, world values, and
+final-response content are omitted by default. Structural data required for
+proof is always retained: event types, tool/action names, resource
+identifiers, sanitized authorization scopes, status/error classes, event
+relationships, state digests, and oracle verdicts. The SQLite agent store
+sanitizes again at the storage boundary even when a caller claims an event
+is already sanitized.
+
+### Unknown provider pricing
+
+A provider with both `input_price_per_million` and `output_price_per_million`
+explicitly configured (including explicit `0.0`) has known pricing; the
+`mock` provider is explicitly known zero-cost. A provider missing either
+price has unknown pricing. When `evaluation.budgets.max_estimated_cost` (or
+the agent `budgets`) is configured and pricing is unknown, the invocation is
+rejected before the provider call with a typed configuration error — the old
+behavior could not prove the configured monetary ceiling. Without a cost
+ceiling, unknown-priced calls proceed but are recorded as `unpriced_requests`
+and never displayed as a known zero cost. Migrate by configuring explicit
+input/output pricing or removing the cost ceiling for an intentionally
+unpriced local route.
+
+### Agent CLI exit codes
+
+- `0` — all required oracles evaluate and the security invariant holds;
+- `1` — one or more deterministic oracles prove impact (verified exploit);
+- `2` — invalid config, corrupt/incompatible replay artifact, or unknown
+  scenario/fixture/world version;
+- `3` — budget exhaustion, target/world/oracle failure, or incomplete run
+  (inconclusive); never clean.
