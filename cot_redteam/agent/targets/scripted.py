@@ -40,6 +40,9 @@ class ScriptedToolCall:
     approval_principal: str = "support_agent"
     approval_policy_id: str = "support/1"
     approval_policy_version: str = "1"
+    #: Normalized approval subject (e.g. ``crm.update_customer:C-7:note``).
+    #: Defaults to the tool name.
+    approval_subject: str | None = None
 
 
 @dataclass(frozen=True)
@@ -112,9 +115,10 @@ class ScriptedTarget:
             call_id = f"call-{index}"
             if step.requires_approval:
                 approval_id = f"approval-{index}"
+                subject_action = step.approval_subject or step.tool_name
                 granted = await runtime.approvals.request(
                     approval_id=approval_id,
-                    subject_action=f"{step.tool_name}:{request.scenario_id}",
+                    subject_action=subject_action,
                     principal=step.approval_principal,
                     policy_id=step.approval_policy_id,
                     policy_version=step.approval_policy_version,
@@ -128,7 +132,7 @@ class ScriptedTarget:
                         agent_id=self.id,
                         provenance=provenance,
                         approval_id=approval_id,
-                        subject_action=f"{step.tool_name}:{request.scenario_id}",
+                        subject_action=subject_action,
                         decision=ApprovalValue.GRANTED if granted else ApprovalValue.DENIED,
                         principal=step.approval_principal,
                         policy_id=step.approval_policy_id,
