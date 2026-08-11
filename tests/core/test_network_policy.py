@@ -75,3 +75,24 @@ def test_redirect_target_revalidated() -> None:
 def test_public_address_allowed_by_default() -> None:
     policy = EndpointPolicy()
     policy.validate_resolved_addresses("api.example.com", ["93.184.216.34"])
+
+
+def test_invalid_port_raises_endpoint_policy_error() -> None:
+    """Regression: urlparse raises raw ValueError for out-of-range or
+    non-numeric ports; callers catch EndpointPolicyError, so the policy
+    must translate before the raw exception escapes."""
+    policy = EndpointPolicy()
+    for url in ("https://example.com:99999", "https://example.com:abc"):
+        with pytest.raises(EndpointPolicyError):
+            policy.validate_url(url)
+
+
+def test_implicit_default_port_matches_allowlist() -> None:
+    """Regression: a URL with no explicit port parses port as None; the
+    scheme default (http=80, https=443) must be used for allowlist
+    comparison so https://example.com passes an allowed_ports={443}."""
+    policy = EndpointPolicy(allowed_ports={443})
+    result = policy.validate_url("https://example.com")
+    assert result.port == 443
+    with pytest.raises(EndpointPolicyError):
+        policy.validate_url("http://example.com")

@@ -27,9 +27,9 @@ evaluation:
   models:
     - mock:target
   dataset_path: pkg:sample.jsonl
-  sample_count: 2
+  sample_count: 1
   budgets:
-    max_requests: 20
+    max_requests: 40
     max_elapsed_seconds: 120
   retain_prompts: false
   retain_responses: false
@@ -90,3 +90,95 @@ def test_scan_registered_in_cli() -> None:
     assert "--dataset" in proc.stdout
     assert "--sample-count" in proc.stdout
     assert "--model" in proc.stdout
+
+
+def test_scan_failed_run_exits_partial(
+    tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch
+) -> None:
+    """Regression: a run where EVERY item failed (run-level FAILED) must
+    exit 3 (partial), never 0 (false-clean CI signal)."""
+    from datetime import datetime, timezone
+    from importlib import import_module
+
+    cli_main = import_module("cot_redteam.cli.main")
+    from cot_redteam.core.types import EvaluationRun, RunStatus, RunSummary
+
+    async def fake_run_evaluation(config):
+        return EvaluationRun(
+            run_id="audit-failed",
+            status=RunStatus.FAILED,
+            items=(),
+            summary=RunSummary(
+                status=RunStatus.FAILED,
+                planned=1,
+                succeeded=0,
+                failed=1,
+                cancelled=0,
+                monitor_excluded=0,
+            ),
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+            seed=42,
+        )
+
+    monkeypatch.setattr(cli_main, "run_evaluation", fake_run_evaluation)
+    cfg = tmp_path / "scan.yaml"
+    cfg.write_text(_MOCK_REFUSE, encoding="utf-8")
+    exit_code = cmd_scan(_Args(config=str(cfg)))
+    captured = capsys.readouterr().out
+    assert exit_code == 3
+    assert "partial" in captured
+
+
+def test_scan_errored_items_exit_partial(
+    tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch
+) -> None:
+    """Regression: per-item provider/attack errors inside a COMPLETED-status
+    run must still exit 3 (partial), never 0."""
+    from datetime import datetime, timezone
+    from importlib import import_module
+
+    cli_main = import_module("cot_redteam.cli.main")
+    from cot_redteam.core.types import (
+        EvaluationItem,
+        EvaluationRun,
+        ItemStatus,
+        ModelRef,
+        RunStatus,
+        RunSummary,
+    )
+
+    async def fake_run_evaluation(config):
+        return EvaluationRun(
+            run_id="audit-errored",
+            status=RunStatus.COMPLETED,
+            items=(
+                EvaluationItem(
+                    item_id="i1",
+                    model=ModelRef.parse("mock:model"),
+                    attack_id="injection.system_canary_adaptive",
+                    sample_id="s1",
+                    status=ItemStatus.PROVIDER_ERROR,
+                    error="provider down",
+                ),
+            ),
+            summary=RunSummary(
+                status=RunStatus.COMPLETED,
+                planned=1,
+                succeeded=0,
+                failed=1,
+                cancelled=0,
+                monitor_excluded=0,
+            ),
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+            seed=42,
+        )
+
+    monkeypatch.setattr(cli_main, "run_evaluation", fake_run_evaluation)
+    cfg = tmp_path / "scan.yaml"
+    cfg.write_text(_MOCK_REFUSE, encoding="utf-8")
+    exit_code = cmd_scan(_Args(config=str(cfg)))
+    captured = capsys.readouterr().out
+    assert exit_code == 3
+    assert "partial" in captured

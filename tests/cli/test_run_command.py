@@ -137,3 +137,55 @@ def test_evolve_without_generator_model_errors_cleanly(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     assert main(["evolve", "--config", str(cfg_path)]) == 2
+
+
+def test_run_config_error_trial_exits_config(tmp_path: Path, monkeypatch) -> None:
+    """Regression: a benchmark trial typed CONFIG_ERROR (e.g. judge scorer
+    missing rubric) must make `run` exit 2 (config error), not 3 (partial)."""
+    from datetime import datetime, timezone
+    from importlib import import_module
+    from types import SimpleNamespace
+
+    cli_main = import_module("cot_redteam.cli.main")
+    from cot_redteam.benchmark.conversation import config_error_transcript
+    from cot_redteam.benchmark.results import BenchmarkRunResult, BenchmarkTrialResult
+    from cot_redteam.benchmark.scoring import TranscriptScoring
+
+    trial = SimpleNamespace(trial_id="cfg-run:trial:1")
+    result = BenchmarkTrialResult(
+        trial=trial,  # type: ignore[arg-type]
+        transcript=config_error_transcript(
+            "cfg-run:trial:1", "judge scorer 'evidence_judge' requires a non-empty rubric"
+        ),
+        scoring=TranscriptScoring(trial_id="cfg-run:trial:1", outcomes=()),
+        canary_metadata={},
+        transformation_digest="",
+        judge_results=(),
+    )
+    run = BenchmarkRunResult(
+        run_id="cfg-run",
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+        trials=(result,),
+    )
+
+    async def fake_run_benchmark(config):
+        return run
+
+    monkeypatch.setattr(cli_main, "run_benchmark", fake_run_benchmark)
+
+    cfg = {
+        "version": 2,
+        "global": {"seed": 1},
+        "providers": {"mock": {"kind": "mock", "mock_mode": "refuse"}},
+        "evaluation": {
+            "models": ["mock:model"],
+            "suite_paths": [str(tmp_path / "suite.jsonl")],
+            "monitors": ["regex"],
+            "judge_model": "mock:judge",
+            "judge_scorers": ["evidence_judge"],
+        },
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    assert main(["run", "--config", str(cfg_path)]) == 2
