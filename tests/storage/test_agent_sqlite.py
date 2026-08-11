@@ -529,7 +529,14 @@ def test_begin_agent_run_rejects_duplicate_without_deleting_evidence(tmp_path: P
     asyncio.run(_run())
 
 
-def test_finalize_rejects_terminal_or_interrupted_rows(tmp_path: Path) -> None:
+def test_finalize_is_idempotent_for_terminal_or_recovered_rows(tmp_path: Path) -> None:
+    """Finalization of an already-terminal row is a benign no-op, not an error.
+
+    A concurrent ``recover_incomplete_agent_runs()`` can mark a still-
+    finalizing scenario's row INTERRUPTED; the old raise escaped
+    run_agent_scenario and lost the run. Terminal rows keep their state;
+    identity mismatches still raise.
+    """
     import asyncio
 
     async def _run() -> None:
@@ -541,8 +548,8 @@ def test_finalize_rejects_terminal_or_interrupted_rows(tmp_path: Path) -> None:
                 run_store=store,
                 run_id="terminal-run",
             )
-            with pytest.raises(ValueError, match="only RUNNING"):
-                store.finalize_agent_run(run, retention=AgentRetentionSettings())
+            # Row already COMPLETED: finalize is a no-op (no raise).
+            store.finalize_agent_run(run, retention=AgentRetentionSettings())
             assert store.get_agent_run(run.run_id).status is AgentRunStatus.COMPLETED  # type: ignore[union-attr]
 
             interrupted = run.model_copy(
@@ -558,8 +565,8 @@ def test_finalize_rejects_terminal_or_interrupted_rows(tmp_path: Path) -> None:
             candidate = interrupted.model_copy(
                 update={"status": AgentRunStatus.FAILED, "completed_at": run.completed_at}
             )
-            with pytest.raises(ValueError, match="only RUNNING"):
-                store.finalize_agent_run(candidate, retention=AgentRetentionSettings())
+            # Row recovered to INTERRUPTED: finalize is a no-op (no raise).
+            store.finalize_agent_run(candidate, retention=AgentRetentionSettings())
             assert store.get_agent_run("interrupted-run").status is AgentRunStatus.INTERRUPTED  # type: ignore[union-attr]
 
             identity_shell = run.model_copy(
@@ -580,6 +587,8 @@ def test_finalize_rejects_terminal_or_interrupted_rows(tmp_path: Path) -> None:
                     ),
                 }
             )
+            # Identity mismatch is still a hard error: never finalize a run
+            # whose refs disagree with the row it was begun under.
             with pytest.raises(ValueError, match="identity"):
                 store.finalize_agent_run(forged, retention=AgentRetentionSettings())
             assert (
@@ -745,3 +754,70 @@ def test_agent_store_rejects_invalid_begin_and_finalize_states(tmp_path: Path) -
         store.close()
 
     asyncio.run(_run())
+
+
+def test_finalize_is_idempotent_after_recovery(tmp_path: Path) -> None:
+    """Regression: recover marking a row INTERRUPTED mid-run must not make
+    the run's own finalize raise (the old ValueError escaped the scenario
+    runner and lost the run)."""
+    import asyncio
+
+    async def _run() -> None:
+        with _store(tmp_path) as store:
+            run = await run_agent_scenario(
+                scenario_id="support.approval_bypass.v1",
+                fixture="clean",
+                seed=7,
+                run_store=store,
+                run_id="recovered-run",
+            )
+            # Simulate the concurrent recovery that fired while the scenario
+            # was still finalizing: mark the row INTERRUPTED, then finalize.
+            store.connection.execute(
+                "UPDATE agent_runs SET status = ? WHERE run_id = ?",
+                (AgentRunStatus.INTERRUPTED.value, "recovered-run"),
+            )
+            store.connection.commit()
+            store.finalize_agent_run(run, retention=AgentRetentionSettings())
+            row = store.get_agent_run("recovered-run")
+            assert row is not None
+            assert row.status is AgentRunStatus.INTERRUPTED
+
+    asyncio.run(_run())
+
+
+def test_partial_schema_recovers_on_reopen(tmp_path: Path) -> None:
+    """Regression: a migration interrupted mid-way (old executescript left
+    some tables created, schema_migrations never recorded) must not brick
+    the store — reopening runs the remaining statements and records the
+    versions (IF NOT EXISTS + per-statement transaction)."""
+    import sqlite3
+
+    db = tmp_path / "bricked.db"
+    conn = sqlite3.connect(str(db))
+    # Simulate the half-applied migration 1: the table exists but the
+    # migration version was never recorded.
+    conn.execute(
+        "CREATE TABLE runs (run_id TEXT PRIMARY KEY, status TEXT NOT NULL, "
+        "started_at TEXT NOT NULL, completed_at TEXT, metadata_json TEXT NOT NULL, "
+        "manifest_json TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    with SQLiteRunStore(db) as store:
+        tables = {
+            row[0]
+            for row in store.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert "runs" in tables
+        assert "evaluation_items" in tables
+        versions = {
+            row[0] for row in store.connection.execute("SELECT version FROM schema_migrations")
+        }
+        assert versions == {1, 2, 3}
+        store.connection.execute(
+            "INSERT INTO runs(run_id, status, started_at, metadata_json) VALUES (?, ?, ?, ?)",
+            ("r1", "completed", "2026-01-01T00:00:00Z", "{}"),
+        )
+        store.connection.commit()

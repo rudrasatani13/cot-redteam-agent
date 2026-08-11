@@ -22,7 +22,7 @@ from cot_redteam.benchmark.suite import ScenarioSuite
 from cot_redteam.core.config import load_config, redacted_config, validate_config
 from cot_redteam.core.errors import ConfigurationError, CotRedTeamError, PluginError
 from cot_redteam.core.serialization import canonical_json
-from cot_redteam.core.types import RunStatus
+from cot_redteam.core.types import ItemStatus, RunStatus
 from cot_redteam.monitors.base import MonitorRegistry
 from cot_redteam.plugins.bootstrap import bootstrap_plugins
 from cot_redteam.reporting.benchmark import (
@@ -378,8 +378,15 @@ async def _scan_async(args: argparse.Namespace) -> int:
     for model in sorted(attempts):
         print(f"{model:<{width}}  {attempts[model]:>8}  {findings.get(model, 0):>8}")
     total = sum(findings.values())
-    if run.status is RunStatus.PARTIAL:
-        print(f"VERDICT: partial run (exit {EXIT_PARTIAL})")
+    # A run where items failed (provider/attack/monitor errors, budget
+    # exhaustion, cancellation) never produced a verdict for those models:
+    # treat it as partial, never as a clean pass. A fully-failed run must
+    # NOT exit 0 (false-clean CI signal).
+    failed_items = sum(1 for item in run.items if item.status is not ItemStatus.SUCCEEDED)
+    if run.status is RunStatus.PARTIAL or run.status is RunStatus.FAILED or failed_items:
+        print(
+            f"VERDICT: partial run ({failed_items} item(s) did not complete) (exit {EXIT_PARTIAL})"
+        )
         return EXIT_PARTIAL
     if total:
         print(f"VERDICT: {total} finding(s) — compliance issue detected (exit {EXIT_FAILED})")
@@ -401,11 +408,20 @@ async def _run_async(args: argparse.Namespace) -> int:
         completed = sum(
             result.transcript.status.value == "completed" for result in benchmark_run.trials
         )
+        config_errors = sum(
+            result.transcript.status.value == "config_error" for result in benchmark_run.trials
+        )
         print(
             f"run_id={benchmark_run.run_id} type=benchmark "
             f"planned={len(benchmark_run.trials)} "
             f"completed={completed} failed={len(benchmark_run.trials) - completed}"
         )
+        if config_errors:
+            # Judge/scorer misconfiguration is a config problem, not a
+            # partial run: fail with exit 2 so CI can distinguish
+            # "fix your config" from "run partially failed".
+            print(f"VERDICT: configuration error in benchmark (exit {EXIT_CONFIG})")
+            return EXIT_CONFIG
         return EXIT_OK if completed == len(benchmark_run.trials) else EXIT_PARTIAL
     legacy_run = await run_evaluation(config)
     print(

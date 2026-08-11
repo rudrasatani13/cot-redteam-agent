@@ -38,6 +38,7 @@ class TuiState:
     run_id: str = "-"
     model: str = "-"
     attack_id: str = "-"
+    attack_explicit: bool = False
     sample_id: str = "-"
     payload_id: str = "-"
     attempt: int = 0

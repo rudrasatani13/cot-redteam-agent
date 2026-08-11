@@ -196,6 +196,7 @@ if TEXTUAL_AVAILABLE:
             self.state.model = models[0] if models else "-"
             default_attack = "injection.system_canary_agent"
             self.state.attack_id = attacks[0] if attacks else default_attack
+            self.state.attack_explicit = False
             self.state.effort = "agentic" if "agent" in self.state.attack_id else "adaptive"
             self.state.sandbox = "local-eval"
             attack_cfg = self.session_config.evaluation.attack_config.get(self.state.attack_id, {})
@@ -296,7 +297,12 @@ if TEXTUAL_AVAILABLE:
             attacks = (
                 [self.state.attack_id] if self.state.attack_id else list(cfg.evaluation.attacks)
             )
-            if self.state.effort == "fixed":
+            if self.state.attack_explicit:
+                # A /attack choice wins over the effort-derived default; the
+                # effort selector only fills in an attack when the user did
+                # not pick one explicitly.
+                attacks = [self.state.attack_id]
+            elif self.state.effort == "fixed":
                 attacks = ["injection.system_canary"]
             elif self.state.effort == "adaptive":
                 attacks = ["injection.system_canary_adaptive"]
@@ -412,6 +418,7 @@ if TEXTUAL_AVAILABLE:
                     return
                 attack = parsed.args[0]
                 self.state.attack_id = attack
+                self.state.attack_explicit = True
                 evaluation = self.session_config.evaluation.model_copy(update={"attacks": [attack]})
                 self.session_config = self.session_config.model_copy(
                     update={"evaluation": evaluation}
@@ -443,6 +450,9 @@ if TEXTUAL_AVAILABLE:
                 if mode not in {"adaptive", "fixed", "agentic", "agent"}:
                     self._note("usage: /effort agentic|adaptive|fixed", ok=False)
                     return
+                # Explicit effort selects the attack too; a previous /attack
+                # choice no longer applies.
+                self.state.attack_explicit = False
                 if mode in {"agentic", "agent"}:
                     self.state.effort = "agentic"
                     self.state.attack_id = "injection.system_canary_agent"

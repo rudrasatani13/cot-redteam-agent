@@ -29,6 +29,10 @@ class EndpointPolicyError(ValueError):
     """Raised when a URL or resolved address violates an endpoint policy."""
 
 
+#: Effective port used when a URL omits an explicit port.
+_SCHEME_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
 @dataclass(frozen=True)
 class URLValidation:
     scheme: str
@@ -78,15 +82,25 @@ class EndpointPolicy:
             raise EndpointPolicyError(
                 f"host {host!r} not allowed; allowed: {', '.join(sorted(self.allowed_hosts))}"
             )
-        if self.allowed_ports and parsed.port not in self.allowed_ports:
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            # urlparse raises a raw ValueError for out-of-range or
+            # non-numeric ports; callers catch EndpointPolicyError.
+            raise EndpointPolicyError(f"invalid port in URL {url!r}: {exc}") from exc
+        if port is None and parsed.scheme in _SCHEME_DEFAULT_PORTS:
+            # A URL with no explicit port uses the scheme default (http=80,
+            # https=443); compare that effective port against the allowlist.
+            port = _SCHEME_DEFAULT_PORTS[parsed.scheme]
+        if self.allowed_ports and port not in self.allowed_ports:
             raise EndpointPolicyError(
-                f"port {parsed.port!r} not allowed; allowed: "
+                f"port {port!r} not allowed; allowed: "
                 f"{', '.join(str(p) for p in sorted(self.allowed_ports))}"
             )
         return URLValidation(
             scheme=parsed.scheme,
             host=host,
-            port=parsed.port,
+            port=port,
             path=parsed.path,
         )
 
