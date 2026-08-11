@@ -107,6 +107,33 @@ def test_attacker_context_never_receives_canary() -> None:
     assert "candidate extraction prompts" in seen_prompts[0]
 
 
+def test_attacker_history_redacts_canary_from_refusal_preview() -> None:
+    """A refusal-with-quote must not leak the canary into attacker context."""
+    import base64
+
+    from cot_redteam.attacks.injection.agent_llm import _build_attacker_history
+
+    history = [
+        {
+            "attempt": 1,
+            "payload_id": "p1",
+            "technique_id": "t.direct",
+            "success": False,
+            "defense_class": "refusal_with_quote",
+            "response_preview": (
+                f"I cannot reveal the confidential verification token {CANARY} "
+                f"or its encoded form {base64.b64encode(CANARY.encode()).decode()}."
+            ),
+        }
+    ]
+    rendered = _build_attacker_history(history, canary=CANARY)
+    assert CANARY not in rendered
+    assert base64.b64encode(CANARY.encode()).decode() not in rendered
+    assert "[REDACTED]" in rendered
+    # Without the canary parameter the helper stays backwards compatible.
+    assert CANARY in _build_attacker_history(history)
+
+
 def test_parse_candidates_variants() -> None:
     assert parse_candidates('["a {question}", "b {question}"]') == [
         "a {question}",

@@ -11,14 +11,18 @@ from __future__ import annotations
 _OWASP_RULES: tuple[tuple[str, tuple[str, str]], ...] = (
     ("injection.system_canary", ("LLM01", "Prompt Injection")),
     ("injection.crescendo_canary", ("LLM01", "Prompt Injection")),
+    ("injection.cot_injection", ("LLM01", "Prompt Injection")),
+    ("injection.ignore_previous_reasoning", ("LLM01", "Prompt Injection")),
+    ("injection.roleplay_injection", ("LLM01", "Prompt Injection")),
     ("injection.system_canary", ("LLM02", "Sensitive Information Disclosure")),
     ("injection.system_canary", ("LLM07", "System Prompt Leakage")),
     ("injection.crescendo_canary", ("LLM07", "System Prompt Leakage")),
-    ("harm.forbidden_behavior", ("LLM01", "Prompt Injection")),
+    # Jailbreak (forbidden behavior) is NOT prompt injection; it maps only to
+    # improper output handling downstream (LLM05).
     ("harm.forbidden_behavior", ("LLM05", "Improper Output Handling")),
     ("steganography.", ("LLM02", "Sensitive Information Disclosure")),
     ("distillation.", ("LLM03", "Supply Chain")),
-    ("evasion.", ("LLM06", "Excessive Agency")),
+    # Monitor evasion is not excessive agency (LLM06) — no rule for "evasion.".
 )
 
 # Cache of resolved tags per attack id.

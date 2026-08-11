@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from cot_redteam.attacks.base import BaseAttack, register_attack
+from cot_redteam.attacks.injection.scoring import normalize_text
 from cot_redteam.core.types import (
     AttackAssessment,
     AttackPrompt,
@@ -13,7 +14,9 @@ from cot_redteam.plugins.registry import PluginMetadata
 
 
 def _text(response: ModelResponse) -> str:
-    return (response.reasoning or response.text or "").lower()
+    # Normalize Unicode punctuation (curly apostrophes/quotes) so markers like
+    # "don't tell" match regardless of the model's typography.
+    return normalize_text(response.reasoning or response.text or "").lower()
 
 
 @register_attack
