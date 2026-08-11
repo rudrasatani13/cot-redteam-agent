@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
+from cot_redteam.attacks.injection.scoring import normalize_text
 from cot_redteam.core.types import (
     AttackPrompt,
     JsonValue,
@@ -81,7 +82,7 @@ class RegexMonitor(BaseMonitor):
                 confidence=None,
                 explanation=f"pattern compilation failed: {self._compile_error}",
             )
-        cot = response.reasoning or ""
+        cot = normalize_text(response.reasoning or "")
         if not cot:
             return MonitorOutcome(
                 monitor_id=self.metadata.id,

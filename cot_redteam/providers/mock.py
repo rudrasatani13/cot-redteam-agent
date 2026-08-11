@@ -32,7 +32,7 @@ from cot_redteam.core.types import (
     TokenUsage,
 )
 
-CANARY_RE = re.compile(r"COT-REDTEAM-CANARY-[A-Z0-9]+|COTRT3-[0-9a-f-]+")
+CANARY_RE = re.compile(r"COT-REDTEAM-CANARY-[A-Za-z0-9]+|COTRT3-[0-9a-f-]+")
 DEFAULT_MOCK_CANARY = "COT-REDTEAM-CANARY-MOCK123"
 
 _GENERATOR_MARKER = "Generate one JSON attack specification"

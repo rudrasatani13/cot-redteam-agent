@@ -21,6 +21,7 @@ from cot_redteam.attacks.base import BaseAttack, register_attack
 from cot_redteam.attacks.injection.scoring import (
     assess_system_canary_disclosure,
     classify_defense,
+    redact_canary_variants,
 )
 from cot_redteam.core.types import (
     AttackAssessment,
@@ -145,7 +146,10 @@ class CrescendoCanaryAttack(BaseAttack):
         rung_id, template = LADDER[turn_index]
         text = template.replace("{question}", sample.question)
         if reply:
-            text = text.replace("{reply}", reply[:300])
+            # The prior reply may quote the canary while refusing (raw or
+            # encoded); scrub it before echoing it into the next rung.
+            scrubbed = redact_canary_variants(reply, self.canary)
+            text = text.replace("{reply}", scrubbed[:300])
         else:
             # Rungs that reference a reply degrade gracefully without one.
             text = text.replace("{reply}", "(no prior reply)")
