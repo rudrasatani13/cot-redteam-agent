@@ -31,6 +31,7 @@ from cot_redteam.reporting.benchmark import (
     BenchmarkReportWriter,
 )
 from cot_redteam.reporting.report import ReportFormat, ReportWriter
+from cot_redteam.reporting.sarif import render_sarif
 from cot_redteam.resources import read_example_config_text
 from cot_redteam.storage.sqlite import SQLiteRunStore
 
@@ -101,6 +102,9 @@ def _build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--model", action="append", default=None)
     scan.add_argument("--attack", action="append", default=None)
     scan.add_argument("--seed", type=int, default=None)
+    scan.add_argument(
+        "--sarif", default=None, help="write scan findings as a SARIF 2.1.0 log to this path"
+    )
 
     list_runs = sub.add_parser("list-runs", help="list stored runs")
     list_runs.add_argument("--config", required=True)
@@ -115,7 +119,7 @@ def _build_parser() -> argparse.ArgumentParser:
     report.add_argument("--run-id", required=True)
     report.add_argument(
         "--format",
-        choices=["markdown", "csv", "jsonl", "latex"],
+        choices=["markdown", "csv", "jsonl", "latex", "sarif"],
         default="markdown",
     )
     report.add_argument("--output-dir", default=None)
@@ -367,6 +371,11 @@ async def _scan_async(args: argparse.Namespace) -> int:
     validate_config(config, require_credentials=True)
 
     run = await run_evaluation(config)
+    if args.sarif:
+        sarif_path = Path(args.sarif)
+        sarif_path.parent.mkdir(parents=True, exist_ok=True)
+        sarif_path.write_text(render_sarif(run), encoding="utf-8")
+        print(f"SARIF written to {sarif_path}")
     findings: dict[str, int] = {}
     attempts: dict[str, int] = {}
     for item in run.items:

@@ -15,10 +15,14 @@ references point at the state of the art each item builds on.
 - [x] **`pytest-timeout`** in dev extras and `requirements-dev.lock`.
 - [x] **CI OS matrix** — tests now run on Ubuntu, macOS, and Windows;
   symlink-dependent tests skip on Windows.
-- [ ] **SARIF export** — `scan`/`agent scan` findings as SARIF JSON so
-  GitHub code scanning and other tools can ingest them.
-- [ ] **Scheduled CI scanning** — a cron workflow running an offline scan
-  (mock provider + packaged suites) that fails the branch on findings.
+- [x] **SARIF export** — `scan --sarif PATH` and `report --format sarif`
+  emit SARIF 2.1.0 logs (error for disclosures, warning for triggered
+  monitors, note for incomplete items) with OWASP-versioned rules;
+  ingestible by GitHub code scanning.
+- [x] **Scheduled CI scanning** — nightly `nightly-scan.yml` (02:00 UTC +
+  manual dispatch) runs a clean compliance scan with SARIF, the agent
+  exploit path, exact replay, and patched-target regression suites;
+  failures alert on the repository instead of silently drifting.
 
 ## Phase 1 — v0.7: a team of red-team agents
 
