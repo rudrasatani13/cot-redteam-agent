@@ -32,11 +32,19 @@ Auto-start without typing `/run`:
 cot-redteam tui --config config.yaml --auto-start
 ```
 
-Non-interactive Rich live dashboard (no slash commands):
+Non-interactive Rich live dashboard (no slash commands). Note: like
+`--auto-start`, this immediately starts a real evaluation and may incur
+provider cost:
 
 ```bash
 cot-redteam tui --config config.yaml --live-only
 ```
+
+`Ctrl+C` first stops a running evaluation (no further requests are issued)
+and quits on the next press; an interrupted run exits with code 130, so CI
+gates keyed on `1 = findings` are not poisoned. If the interactive TUI
+crashes at runtime, the command fails rather than silently restarting a
+second billed run through the fallback dashboard.
 
 ## Layout
 

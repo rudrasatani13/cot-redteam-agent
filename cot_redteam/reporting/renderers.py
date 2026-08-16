@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 
 from cot_redteam.reporting.model import ReportModel
 from cot_redteam.reporting.owasp import owasp_tags_for
@@ -27,10 +28,65 @@ def latex_escape(value: str) -> str:
     return "".join(_LATEX_MAP.get(ch, ch) for ch in value)
 
 
-def _csv_neutralize(value: str) -> str:
+def csv_neutralize(value: str) -> str:
+    """Prefix spreadsheet formula triggers (= + - @ TAB CR) with an apostrophe.
+
+    Shared by every CSV writer in the reporting package so hostile strings
+    cannot execute as formulas when a report is opened in a spreadsheet.
+    Bare carriage returns (not part of a ``\r\n`` pair) are flattened to a
+    space: they are invalid inside unquoted CSV cells and trip the strict
+    reader on Python 3.10 (whose writer does not quote lone ``\r`` fields).
+    """
     if value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
-        return "'" + value
-    return value
+        value = "'" + value
+    return re.sub(r"\r(?!\n)", " ", value)
+
+
+# Markdown sigils are backslash-escaped and HTML-significant characters are
+# entity-escaped; newlines are flattened so hostile text cannot start a new
+# block (heading, quote, list) on its own line.
+_MD_ESCAPE_MAP = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "*": "\\*",
+    "_": "\\_",
+    "`": "\\`",
+    "[": "\\[",
+    "]": "\\]",
+    "\\": "\\\\",
+    "~": "\\~",
+    "\n": " ",
+    "\r": " ",
+}
+
+_BACKTICK_RUN = re.compile(r"`+")
+
+
+def md_escape(value: str) -> str:
+    """Escape model-derived text for safe inline use in Markdown.
+
+    The threat model treats model and judge output as hostile: emphasis,
+    link, and code sigils are escaped so payloads cannot forge report
+    structure, and ``< > &`` are entity-escaped to neutralize raw HTML in
+    HTML-rendering pipelines.
+    """
+    return "".join(_MD_ESCAPE_MAP.get(ch, ch) for ch in value)
+
+
+def md_inline_code(value: str) -> str:
+    """Render hostile text as an inline code span it cannot break out of.
+
+    The delimiter run is one longer than any backtick run inside the text
+    (the CommonMark rule), padded with spaces when needed, so backticks in
+    model output can neither close the span early nor open a stray one.
+    """
+    text = value.replace("\r", " ").replace("\n", " ")
+    longest = max((len(run) for run in _BACKTICK_RUN.findall(text)), default=0)
+    fence = "`" * (longest + 1)
+    if longest or text[:1] == " " or text[-1:] == " ":
+        return f"{fence} {text} {fence}"
+    return f"{fence}{text}{fence}"
 
 
 def _markdown_code(value: str | None) -> list[str]:
@@ -134,9 +190,9 @@ def render_markdown(report: ReportModel) -> str:
                     "",
                     f"- **Success:** {str(item.assessment.success).lower()}",
                     f"- **Score:** {item.assessment.score:.3f}",
-                    f"- **Explanation:** {item.assessment.explanation or 'None'}",
+                    f"- **Explanation:** {md_escape(item.assessment.explanation or 'None')}",
                     "- **Evidence:**",
-                    *(f"  - {entry}" for entry in evidence),
+                    *(f"  - {md_escape(entry)}" for entry in evidence),
                 ]
             )
         lines.extend(["", "#### Monitor Outcomes", ""])
@@ -148,7 +204,7 @@ def render_markdown(report: ReportModel) -> str:
             lines.extend(
                 [
                     f"- **{outcome.monitor_id}:** {outcome.status.value} "
-                    f"(confidence={confidence}) — {outcome.explanation}",
+                    f"(confidence={confidence}) — {md_escape(outcome.explanation)}",
                     "  - Details:",
                     "",
                     *_markdown_code(details),
@@ -164,17 +220,17 @@ def render_csv(report: ReportModel) -> str:
     writer = csv.writer(buf, lineterminator="\n")
     writer.writerow(["section", "key", "value"])
     for key, value in report.rows:
-        writer.writerow(["summary", key, _csv_neutralize(value)])
+        writer.writerow(["summary", key, csv_neutralize(value)])
     for model_id in report.model_ids:
         # Neutralize formula characters in the full cell and model-id segment.
-        writer.writerow(["models", "model_id", _csv_neutralize(model_id)])
+        writer.writerow(["models", "model_id", csv_neutralize(model_id)])
         if ":" in model_id:
             _, bare = model_id.split(":", 1)
-            writer.writerow(["models", "bare_model_id", _csv_neutralize(bare)])
+            writer.writerow(["models", "bare_model_id", csv_neutralize(bare)])
     for attack_id in report.attack_ids:
-        writer.writerow(["attacks", "attack_id", _csv_neutralize(attack_id)])
+        writer.writerow(["attacks", "attack_id", csv_neutralize(attack_id)])
     for limitation in report.limitations:
-        writer.writerow(["limitations", "item", _csv_neutralize(limitation)])
+        writer.writerow(["limitations", "item", csv_neutralize(limitation)])
     return buf.getvalue()
 
 

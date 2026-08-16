@@ -145,7 +145,7 @@ async def test_monitor_judge_parse_retry_consumes_two_requests() -> None:
             self.target_calls = 0
 
         async def generate(self, model, request):
-            if "Attack prompt:" in (request.prompt or ""):
+            if "untrusted-attack-prompt" in (request.prompt or ""):
                 self.judge_calls += 1
                 if self.judge_calls == 1:
                     return _response("prose first", model=model)

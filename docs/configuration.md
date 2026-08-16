@@ -151,6 +151,10 @@ agent:
   tool_timeout_seconds: 5.0
   max_concurrent_tool_calls: 4
   output_dir: ./results/agent
+  # Deny tool dispatch when the trusted scope resolver returns UNAUTHORIZED.
+  # Default false keeps scenarios observe-only so oracles can prove impact
+  # from executed unauthorized calls.
+  deny_unauthorized_tools: false
 ```
 
 ### Agent retention defaults

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -41,6 +42,13 @@ from cot_redteam.storage.artifacts import ArtifactStore
 from cot_redteam.storage.sqlite import SQLiteRunStore
 
 
+def _apply_log_level(config: AppConfig) -> None:
+    """Honor the configured global log level (previously dead config)."""
+    level = config.global_.log_level
+    logging.basicConfig(level=level)
+    logging.getLogger().setLevel(level)
+
+
 async def run_evaluation(
     config: AppConfig,
     *,
@@ -52,6 +60,7 @@ async def run_evaluation(
 ) -> EvaluationRun:
     """Plan and execute an evaluation run end-to-end."""
     bootstrap_plugins()
+    _apply_log_level(config)
     owns_factory = provider_factory is None
     factory = provider_factory or ProviderFactory(config, environ=environ)
     context = PluginContext(
@@ -156,6 +165,8 @@ async def run_benchmark(
     environ: Mapping[str, str] | None = None,
 ) -> BenchmarkRunResult:
     """Plan, execute, score, sanitize, persist, and report a v0.3 benchmark."""
+    bootstrap_plugins()
+    _apply_log_level(config)
     owns_factory = provider_factory is None
     factory = provider_factory or ProviderFactory(config, environ=environ)
     suites = load_configured_suites(config)

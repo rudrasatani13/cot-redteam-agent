@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from cot_redteam.agent.api import run_agent_scenario, save_replay_artifact
-from cot_redteam.agent.config import AgentSecuritySettings
+from cot_redteam.agent.config import AgentRetentionSettings, AgentSecuritySettings
 from cot_redteam.agent.replay import (
     ReplayArtifactV1,
     ReplayError,
@@ -719,3 +719,263 @@ def test_replay_artifact_has_no_executable_content(tmp_path: Path) -> None:
     blob = json.dumps(data)
     for marker in ("__import__", "pickle", "eval(", "exec(", "shell", "subprocess"):
         assert marker not in blob
+
+
+# -- retention inputs are recorded and applied -------------------------------
+
+
+async def _save_exploit_with_retention(
+    tmp_path: Path,
+    *,
+    retain_final_response: bool,
+) -> Path:
+    settings = AgentSecuritySettings(
+        retention=AgentRetentionSettings(retain_final_response=retain_final_response)
+    )
+    run = await run_agent_scenario(
+        scenario_id="support.indirect_prompt_injection.v1",
+        fixture="vulnerable",
+        seed=7,
+        settings=settings,
+    )
+    assert run.outcome is not None and run.outcome.value == "verified_exploit"
+    artifact_store = ArtifactStore(tmp_path / "artifacts")
+    saved = save_replay_artifact(
+        run,
+        fixture=support_fixture("support.indirect_prompt_injection.v1", "vulnerable"),
+        settings=settings,
+        artifact_store=artifact_store,
+    )
+    assert saved is not None
+    return Path(saved[0])
+
+
+def test_replay_artifact_records_load_bearing_retention(tmp_path: Path) -> None:
+    path = asyncio.run(_save_exploit_with_retention(tmp_path, retain_final_response=True))
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert data["sanitized_inputs"]["retention"] == {"retain_final_response": True}
+
+
+def test_exact_replay_applies_recorded_retention(tmp_path: Path) -> None:
+    """Replaying an artifact saved with retain_final_response=true under
+    default (None) settings must reproduce the same trajectory digest."""
+    path = asyncio.run(_save_exploit_with_retention(tmp_path, retain_final_response=True))
+    artifact = load_replay(path)
+
+    async def _replay() -> ReplayResult:
+        return await run_replay(artifact)
+
+    result = asyncio.run(_replay())
+    assert result.status == "exploit_reproduced"
+    assert result.exit_code == 1
+
+
+def test_exact_replay_rejects_conflicting_caller_retention(tmp_path: Path) -> None:
+    path = asyncio.run(_save_exploit_with_retention(tmp_path, retain_final_response=True))
+    artifact = load_replay(path)
+
+    with pytest.raises(ReplayError, match="retention"):
+        asyncio.run(run_replay(artifact, settings=AgentSecuritySettings()))
+
+
+def test_replay_rejects_unknown_retention_fields(tmp_path: Path) -> None:
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    artifact = _mutate_artifact(
+        load_replay(path),
+        sanitized_inputs={"seed": 7, "retention": {"retain_final_response": True, "x": 1}},
+    )
+    with pytest.raises(ReplayError, match="unknown fields"):
+        asyncio.run(run_replay(artifact))
+
+
+def test_replay_rejects_non_boolean_retention_flag(tmp_path: Path) -> None:
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    artifact = _mutate_artifact(
+        load_replay(path),
+        sanitized_inputs={"seed": 7, "retention": {"retain_final_response": "yes"}},
+    )
+    with pytest.raises(ReplayError, match="must be a boolean"):
+        asyncio.run(run_replay(artifact))
+
+
+# -- detached checksum and duplicate JSON keys -------------------------------
+
+
+def test_load_replay_accepts_matching_detached_checksum(tmp_path: Path) -> None:
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    copied = tmp_path / "copied.json"
+    copied.write_bytes(Path(path).read_bytes())
+    Path(str(copied) + ".sha256").write_text(Path(str(path) + ".sha256").read_text())
+    assert load_replay(copied).replay_id == load_replay(path).replay_id
+
+
+def test_load_replay_rejects_detached_checksum_mismatch(tmp_path: Path) -> None:
+    """Re-serialized (whitespace-only) content keeps the payload checksum
+    valid but changes the raw bytes: the detached checksum must catch it."""
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    reformatted = tmp_path / "reformatted.json"
+    reformatted.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    Path(str(reformatted) + ".sha256").write_text(
+        Path(str(path) + ".sha256").read_text(encoding="utf-8")
+    )
+    with pytest.raises(ReplayError, match="detached replay checksum mismatch"):
+        load_replay(reformatted)
+
+
+def test_load_replay_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    text = Path(path).read_text(encoding="utf-8")
+    duplicated = tmp_path / "duplicated.json"
+    duplicated.write_text(text.replace("{", '{"replay_id": "smuggled", ', 1), encoding="utf-8")
+    with pytest.raises(ReplayError, match="duplicate JSON object key"):
+        load_replay(duplicated)
+
+
+# -- regression suite path containment and seeds ------------------------------
+
+
+def _write_suite(tmp_path: Path, entries: list[dict[str, str]]) -> Path:
+    suite_dir = tmp_path / "suite"
+    suite_dir.mkdir(exist_ok=True)
+    (suite_dir / "suite.json").write_text(
+        json.dumps({"schema_version": 1, "entries": entries}),
+        encoding="utf-8",
+    )
+    return suite_dir
+
+
+@pytest.mark.parametrize(
+    "artifact_ref",
+    ["../exploit.json", "nested/../../exploit.json", "/etc/passwd", "./"],
+)
+def test_regression_suite_rejects_artifact_path_escape(tmp_path: Path, artifact_ref: str) -> None:
+    path, _ = asyncio.run(_save_exploit(tmp_path))
+    suite_dir = tmp_path / "suite"
+    suite_dir.mkdir()
+    import shutil
+
+    shutil.copy(path, suite_dir / "exploit.json")
+    (suite_dir / "suite.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [
+                    {"artifact": artifact_ref, "target": "patched", "expected": "INVARIANT_HELD"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ReplayError, match="relative|traverse|escape|control"):
+        load_regression_suite(suite_dir)
+
+
+def test_regression_suite_rejects_control_characters_in_artifact_path(
+    tmp_path: Path,
+) -> None:
+    suite_dir = _write_suite(
+        tmp_path,
+        [{"artifact": "exploit\n.json", "target": "patched", "expected": "INVARIANT_HELD"}],
+    )
+    with pytest.raises(ReplayError, match="control characters"):
+        load_regression_suite(suite_dir)
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("vulnerable", "INVARIANT_HELD"),
+        ("vulnerable", "INCONCLUSIVE"),
+        ("clean", "VERIFIED_EXPLOIT"),
+        ("patched", "ERROR"),
+    ],
+)
+def test_regression_suite_rejects_invalid_expectation_combos(
+    tmp_path: Path, target: str, expected: str
+) -> None:
+    suite_dir = _write_suite(
+        tmp_path, [{"artifact": "exploit.json", "target": target, "expected": expected}]
+    )
+    with pytest.raises(ReplayError, match="invalid regression expectation"):
+        load_regression_suite(suite_dir)
+
+
+def test_regression_suite_honors_recorded_artifact_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """seed=None (the default) replays each artifact with ITS recorded seed."""
+    path, _ = asyncio.run(_save_exploit(tmp_path))  # saved with seed=7
+    suite_dir = tmp_path / "suite"
+    suite_dir.mkdir()
+    import shutil
+
+    shutil.copy(path, suite_dir / "exploit.json")
+    (suite_dir / "suite.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [
+                    {
+                        "artifact": "exploit.json",
+                        "target": "vulnerable",
+                        "expected": "VERIFIED_EXPLOIT",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    import cot_redteam.agent.api as agent_api
+
+    original = agent_api.run_agent_scenario
+    seen: dict[str, int] = {}
+
+    async def capture(**kwargs: object):
+        seen["seed"] = kwargs["seed"]  # type: ignore[assignment]
+        return await original(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(agent_api, "run_agent_scenario", capture)
+    report = asyncio.run(run_regression_suite(suite_dir))
+    assert seen["seed"] == 7
+    assert report.exit_code == 0  # artifact seed reproduces the exploit
+
+
+def test_regression_suite_explicit_seed_overrides_artifact_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path, _ = asyncio.run(_save_exploit(tmp_path))  # recorded seed=7
+    suite_dir = tmp_path / "suite"
+    suite_dir.mkdir()
+    import shutil
+
+    shutil.copy(path, suite_dir / "exploit.json")
+    (suite_dir / "suite.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [
+                    {
+                        "artifact": "exploit.json",
+                        "target": "vulnerable",
+                        "expected": "VERIFIED_EXPLOIT",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    import cot_redteam.agent.api as agent_api
+
+    original = agent_api.run_agent_scenario
+    seen: dict[str, int] = {}
+
+    async def capture(**kwargs: object):
+        seen["seed"] = kwargs["seed"]  # type: ignore[assignment]
+        return await original(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(agent_api, "run_agent_scenario", capture)
+    asyncio.run(run_regression_suite(suite_dir, seed=99))
+    assert seen["seed"] == 99

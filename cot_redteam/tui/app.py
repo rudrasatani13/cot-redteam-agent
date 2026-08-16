@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -35,19 +36,26 @@ async def run_tui(
     validate_config(config, require_credentials=True, environ=environ)
 
     if interactive:
+        # Only the import/availability check may fall back: a runtime crash
+        # inside the interactive TUI must NOT silently start a second billed
+        # evaluation through the fallback dashboard.
+        interactive_ready = False
         try:
-            from cot_redteam.tui.interactive import TEXTUAL_AVAILABLE, run_interactive_tui
+            from cot_redteam.tui.interactive import TEXTUAL_AVAILABLE
 
-            if TEXTUAL_AVAILABLE and RICH_AVAILABLE:
-                return await run_interactive_tui(
-                    config,
-                    environ=environ,
-                    auto_start=auto_start,
-                )
+            interactive_ready = TEXTUAL_AVAILABLE and RICH_AVAILABLE
         except Exception as exc:  # pragma: no cover - fallback path
             print(
                 f"interactive TUI unavailable ({exc}); falling back to live dashboard",
                 file=sys.stderr,
+            )
+        if interactive_ready:
+            from cot_redteam.tui.interactive import run_interactive_tui
+
+            return await run_interactive_tui(
+                config,
+                environ=environ,
+                auto_start=auto_start,
             )
 
     return await _run_rich_live(
@@ -101,6 +109,7 @@ async def _run_rich_live(
     consumer = asyncio.create_task(consume_events())
     console = Console()
     exit_code = 1
+    eval_task: asyncio.Task | None = None
     try:
         with Live(
             render_dashboard(state),
@@ -132,11 +141,17 @@ async def _run_rich_live(
                 f"successes={state.successes} fails={state.failures}"
             )
     except KeyboardInterrupt:
+        # Cancel the in-flight evaluation so no further billed requests are
+        # issued while the interruption is handled.
+        if eval_task is not None and not eval_task.done():
+            eval_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await eval_task
         state.status = "cancelled"
         state.current_activity = "interrupted by user"
         state.push_activity("run", "Ctrl-C stop", ok=False)
         console.print("\n[yellow]interrupted[/]")
-        exit_code = 1
+        exit_code = 130
     finally:
         await queue.put(None)
         await consumer

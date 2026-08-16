@@ -58,7 +58,7 @@
 | 2 | Credentials resolved only for referenced providers | Configuration tests |
 | 3 | Monitor failures never count as evasion | Metrics tests |
 | 4 | Deterministic planning and sample pairing | Planner tests |
-| 5 | Five provider kinds supported | Provider modules and example config |
+| 5 | Seven provider kinds supported | Provider modules and example config |
 | 6 | Transactional, idempotent SQLite persistence | Storage tests |
 | 7 | Atomic artifacts and valid detached checksums | Artifact and manifest tests |
 | 8 | Real Markdown, CSV, and LaTeX output | Reporting tests |

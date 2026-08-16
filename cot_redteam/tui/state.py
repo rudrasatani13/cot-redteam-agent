@@ -38,6 +38,8 @@ class TuiState:
     run_id: str = "-"
     model: str = "-"
     attack_id: str = "-"
+    # True once an attack was chosen explicitly (config list or /attack);
+    # effort-based defaults must not override an explicit selection.
     attack_explicit: bool = False
     sample_id: str = "-"
     payload_id: str = "-"

@@ -16,6 +16,12 @@ from cot_redteam.benchmark.metrics import (
 from cot_redteam.benchmark.results import BenchmarkRunResult
 from cot_redteam.benchmark.scoring import EvidenceChannel
 from cot_redteam.core.serialization import canonical_json
+from cot_redteam.reporting.renderers import (
+    csv_neutralize,
+    latex_escape,
+    md_escape,
+    md_inline_code,
+)
 from cot_redteam.storage.artifacts import ArtifactStore
 
 
@@ -45,12 +51,17 @@ class BenchmarkReport:
         false_refusal: list[BenchmarkObservation] = []
         grouped_values: dict[tuple[str, str, str, EvidenceChannel], list[BenchmarkObservation]] = {}
         for result in run.trials:
-            scorer_ids = [
+            # The scenario schema has no explicit primary-scorer designation,
+            # so the primary security metric uses the lexicographically first
+            # non-utility scorer id. Sorting makes the choice deterministic
+            # and reorder-proof: shuffling the scenario's scorer list cannot
+            # silently change which scorer drives the headline metric.
+            scorer_ids = sorted(
                 scorer.id
                 for scorer in result.trial.scenario.scorers
                 if not scorer.id.startswith("scorer.utility.")
                 and scorer.id != "scorer.response.present"
-            ]
+            )
             primary_id = scorer_ids[0] if scorer_ids else None
             dimensions = {
                 "model": str(result.trial.model),
@@ -155,17 +166,17 @@ def render_benchmark_markdown(report: BenchmarkReport) -> str:
             [
                 f"### {trial.scenario.id} — repetition {trial.repetition}",
                 "",
-                f"- Model: `{trial.model}`",
-                f"- Policy / technique / transformation: `{trial.policy_id}` / "
-                f"`{trial.technique_id}` / `{trial.transformation_id}`",
-                f"- Status: `{result.transcript.status.value}`",
+                f"- Model: {md_inline_code(str(trial.model))}",
+                f"- Policy / technique / transformation: {md_inline_code(trial.policy_id)} / "
+                f"{md_inline_code(trial.technique_id)} / {md_inline_code(trial.transformation_id)}",
+                f"- Status: {md_inline_code(result.transcript.status.value)}",
                 "",
             ]
         )
         for turn in result.transcript.turns:
             lines.extend([f"#### Turn {turn.turn_index}", ""])
             if turn.response is None:
-                lines.extend([f"- Error: {turn.error or 'No response'}", ""])
+                lines.extend([f"- Error: {md_escape(turn.error or 'No response')}", ""])
                 continue
             lines.extend(
                 [
@@ -183,14 +194,14 @@ def render_benchmark_markdown(report: BenchmarkReport) -> str:
         for outcome in result.scoring.outcomes:
             score = "N/A" if outcome.score is None else f"{outcome.score:.3f}"
             lines.append(
-                f"- `{outcome.scorer_id}` / {outcome.channel.value}: "
+                f"- {md_inline_code(outcome.scorer_id)} / {outcome.channel.value}: "
                 f"**{outcome.verdict.value}** (eligible={str(outcome.eligible).lower()}, "
-                f"score={score}) — {outcome.explanation}"
+                f"score={score}) — {md_escape(outcome.explanation)}"
             )
             for evidence in outcome.evidence:
                 lines.append(
                     f"  - turn {evidence.turn_index}, [{evidence.start}:{evidence.end}]: "
-                    f"`{evidence.text}`"
+                    f"{md_inline_code(evidence.text)}"
                 )
         lines.append("")
     return "\n".join(lines)
@@ -211,10 +222,6 @@ def render_benchmark_jsonl(run: BenchmarkRunResult) -> str:
         )
         for result in run.trials
     ) + ("\n" if run.trials else "")
-
-
-def _neutralize(value: str) -> str:
-    return "'" + value if value and value[0] in ("=", "+", "-", "@", "\t", "\r") else value
 
 
 def render_benchmark_csv(run: BenchmarkRunResult) -> str:
@@ -247,28 +254,30 @@ def render_benchmark_csv(run: BenchmarkRunResult) -> str:
     for result in run.trials:
         trial = result.trial
         for outcome in result.scoring.outcomes:
+            # Every string cell is neutralized: ids flow from imported suites
+            # and provider/judge output, none of which the report trusts.
             writer.writerow(
                 [
-                    run.run_id,
-                    trial.trial_id,
-                    _neutralize(str(trial.model)),
-                    trial.suite_id,
-                    trial.scenario.id,
-                    trial.scenario.family,
-                    trial.scenario.channel,
-                    trial.policy_id,
-                    trial.technique_id,
-                    trial.transformation_id,
+                    csv_neutralize(run.run_id),
+                    csv_neutralize(trial.trial_id),
+                    csv_neutralize(str(trial.model)),
+                    csv_neutralize(trial.suite_id),
+                    csv_neutralize(trial.scenario.id),
+                    csv_neutralize(trial.scenario.family),
+                    csv_neutralize(trial.scenario.channel),
+                    csv_neutralize(trial.policy_id),
+                    csv_neutralize(trial.technique_id),
+                    csv_neutralize(trial.transformation_id),
                     trial.repetition,
-                    result.transcript.status.value,
-                    outcome.scorer_id,
-                    outcome.scorer_version,
-                    outcome.channel.value,
-                    outcome.verdict.value,
+                    csv_neutralize(result.transcript.status.value),
+                    csv_neutralize(outcome.scorer_id),
+                    csv_neutralize(outcome.scorer_version),
+                    csv_neutralize(outcome.channel.value),
+                    csv_neutralize(outcome.verdict.value),
                     outcome.eligible,
                     outcome.score,
-                    canonical_json(dict(outcome.metrics)),
-                    _neutralize(outcome.error or ""),
+                    csv_neutralize(canonical_json(dict(outcome.metrics))),
+                    csv_neutralize(outcome.error or ""),
                 ]
             )
     return output.getvalue()
@@ -281,8 +290,9 @@ def render_benchmark_latex(report: BenchmarkReport) -> str:
         ("Benign task success", _rate(report.utility)),
         ("False refusal", _rate(report.false_refusal)),
     ]
-    escaped = ((name.replace("%", "\\%"), value.replace("%", "\\%")) for name, value in rows)
-    body = "\n".join(f"{name} & {value} \\\\" for name, value in escaped)
+    # Full escaping, not just '%': labels and rates flow through the same
+    # escaper as the run report so hostile characters cannot break the table.
+    body = "\n".join(f"{latex_escape(name)} & {latex_escape(value)} \\\\" for name, value in rows)
     return f"\\begin{{tabular}}{{ll}}\n\\hline\n{body}\n\\hline\n\\end{{tabular}}\n"
 
 

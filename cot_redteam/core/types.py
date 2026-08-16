@@ -73,6 +73,9 @@ def _utc_now() -> datetime:
 def _validate_unit_interval(name: str, value: float | None) -> None:
     if value is None:
         return
+    if isinstance(value, bool):
+        # ``True == 1.0`` would otherwise pass the interval check.
+        raise ValueError(f"{name} must be a number between 0.0 and 1.0, not a bool")
     if not 0.0 <= float(value) <= 1.0:
         raise ValueError(f"{name} must be between 0.0 and 1.0 inclusive, got {value!r}")
 
@@ -93,10 +96,10 @@ class ModelRef:
     @classmethod
     def parse(cls, value: str) -> ModelRef:
         if ":" not in value:
-            raise ValueError("provider:model-id")
+            raise ValueError(f"expected provider:model-id, got {value!r}")
         provider, model_id = value.split(":", 1)
         if not provider or not model_id:
-            raise ValueError("provider:model-id")
+            raise ValueError(f"expected provider:model-id, got {value!r}")
         return cls(provider=provider, model_id=model_id)
 
     def __str__(self) -> str:
@@ -108,16 +111,28 @@ class TokenUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int | None = None
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
     def __post_init__(self) -> None:
-        if self.input_tokens < 0 or self.output_tokens < 0:
-            raise ValueError("token counts must be non-negative")
-        if self.total_tokens is None:
-            object.__setattr__(
-                self,
-                "total_tokens",
-                self.input_tokens + self.output_tokens,
-            )
+        for name in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        ):
+            if getattr(self, name) < 0:
+                raise ValueError("token counts must be non-negative")
+        expected_total = (
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_read_input_tokens
+            + self.cache_creation_input_tokens
+        )
+        # Recompute missing AND inconsistent totals: an explicitly wrong
+        # total must never leak into accounting.
+        if self.total_tokens != expected_total:
+            object.__setattr__(self, "total_tokens", expected_total)
 
 
 @dataclass(frozen=True)

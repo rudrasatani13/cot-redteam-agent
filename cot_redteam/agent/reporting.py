@@ -145,11 +145,15 @@ def render_agent_jsonl(
     *,
     retention: AgentRetentionSettings | None = None,
 ) -> str:
-    """One strict JSON record per run/event/oracle/finding."""
-    diagnostic_sanitizer = AgentSanitizer(retention or AgentRetentionSettings())
-    event_sanitizer = AgentSanitizer(retention) if retention is not None else None
-    oracle_results = diagnostic_sanitizer.sanitize_oracle_result_collection(run.oracle_results)
-    findings = tuple(diagnostic_sanitizer.sanitize_finding(finding) for finding in run.findings)
+    """One strict JSON record per run/event/oracle/finding.
+
+    Events are sanitized with ``retention`` when provided and with the
+    privacy-first defaults otherwise — a missing retention argument never
+    means raw event content.
+    """
+    sanitizer = AgentSanitizer(retention or AgentRetentionSettings())
+    oracle_results = sanitizer.sanitize_oracle_result_collection(run.oracle_results)
+    findings = tuple(sanitizer.sanitize_finding(finding) for finding in run.findings)
     records: list[dict[str, object]] = []
     records.append(
         {
@@ -171,8 +175,7 @@ def render_agent_jsonl(
     )
     for event in run.trajectory.events:
         envelope = event.model_dump(mode="python")
-        if event_sanitizer is not None:
-            envelope = event_sanitizer.sanitize_event(envelope)
+        envelope = sanitizer.sanitize_event(envelope)
         records.append(
             {
                 "record_type": "agent_event",

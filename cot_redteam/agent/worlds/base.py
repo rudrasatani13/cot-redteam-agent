@@ -68,10 +68,20 @@ def validate_args(
     types: dict[str, str] | None = None,
 ) -> ArgumentValidator:
     """Build a minimal declarative argument validator (string/integer/
-    object/array/boolean with required checks)."""
+    object/array/boolean with required checks).
+
+    Unknown argument names are rejected: a tool call may only carry the
+    arguments its schema declares (``required`` plus ``types``). ``bool`` is
+    not accepted where an integer is declared even though ``bool`` is an
+    ``int`` subclass in Python.
+    """
     expected_types = types or {}
 
     def validate(arguments: Mapping[str, JsonValue]) -> None:
+        known = set(required).union(expected_types)
+        for name in arguments:
+            if name not in known:
+                raise ValueError(f"unknown argument {name!r}")
         for name in required:
             if name not in arguments:
                 raise ValueError(f"missing required argument {name!r}")
@@ -81,7 +91,7 @@ def validate_args(
             value = arguments[name]
             if expected == "string" and not isinstance(value, str):
                 raise ValueError(f"argument {name!r} must be a string")
-            if expected == "integer" and not isinstance(value, int):
+            if expected == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
                 raise ValueError(f"argument {name!r} must be an integer")
             if expected == "object" and not isinstance(value, dict):
                 raise ValueError(f"argument {name!r} must be an object")

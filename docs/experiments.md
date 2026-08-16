@@ -27,7 +27,10 @@ monitor behavior remain separate dimensions; there is no universal score.
 
 Bootstrap intervals need at least two eligible samples. Paired comparisons
 require matching sample IDs and report group sizes, risk difference, odds
-ratio (when defined), and Fisher p-value together.
+ratio (when defined), the paired discordant-pair standard error, and an
+exact McNemar p-value (binomial test on the discordant pairs) together.
+When several items share a sample ID, the first item after a stable sort is
+used and duplicates are ignored.
 
 ## Data retention
 

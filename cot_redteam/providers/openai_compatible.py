@@ -23,8 +23,22 @@ from cot_redteam.providers.base import (
     SleepFn,
     classify_http_status,
     default_sleep,
+    parse_retry_after,
     validate_message_capabilities,
 )
+
+
+def _usage_int(usage: Mapping[str, Any], *keys: str) -> int:
+    """First non-None integer among ``keys``.
+
+    Explicit ``None`` checks (not ``or`` chains) so a legitimate ``0``
+    reported by the provider is never skipped in favor of a fallback key.
+    """
+    for key in keys:
+        value = usage.get(key)
+        if value is not None:
+            return int(value)
+    return 0
 
 
 class OpenAICompatibleProvider:
@@ -39,6 +53,7 @@ class OpenAICompatibleProvider:
         self.settings = settings
         self.capabilities = TargetCapabilities(**settings.capabilities.model_dump())
         self.request_count = 0
+        self.last_wire_attempts = 0
         self._sleep = sleep or default_sleep
         self._retry = RetryPolicy(max_retries=settings.max_retries)
         headers = {"Content-Type": "application/json", **settings.headers}
@@ -85,47 +100,52 @@ class OpenAICompatibleProvider:
             payload["stop"] = list(request.stop)
 
         attempt = 0
-        while True:
-            self.request_count += 1
-            started = time.perf_counter()
-            try:
-                response = await self._client.post("/chat/completions", json=payload)
-            except httpx.TimeoutException as exc:
-                if attempt >= self._retry.max_retries:
-                    raise TransientProviderError(f"timeout after retries: {exc}") from exc
-                await self._sleep(self._retry.delay_for_attempt(attempt))
-                attempt += 1
-                continue
-            except httpx.TransportError as exc:
-                if attempt >= self._retry.max_retries:
-                    raise TransientProviderError(f"connection error: {exc}") from exc
-                await self._sleep(self._retry.delay_for_attempt(attempt))
-                attempt += 1
-                continue
-
-            if response.status_code >= 400:
-                err_cls = classify_http_status(response.status_code)
-                if err_cls is TransientProviderError and attempt < self._retry.max_retries:
-                    retry_after = response.headers.get("Retry-After")
-                    if retry_after and retry_after.isdigit():
-                        await self._sleep(float(retry_after))
-                    else:
-                        await self._sleep(self._retry.delay_for_attempt(attempt))
+        wire_attempts = 0
+        try:
+            while True:
+                self.request_count += 1
+                wire_attempts += 1
+                started = time.perf_counter()
+                try:
+                    response = await self._client.post("/chat/completions", json=payload)
+                except httpx.TimeoutException as exc:
+                    if attempt >= self._retry.max_retries:
+                        raise TransientProviderError(f"timeout after retries: {exc}") from exc
+                    await self._sleep(self._retry.delay_for_attempt(attempt))
                     attempt += 1
                     continue
-                raise err_cls(f"provider HTTP {response.status_code} for {model}")
+                except httpx.TransportError as exc:
+                    if attempt >= self._retry.max_retries:
+                        raise TransientProviderError(f"connection error: {exc}") from exc
+                    await self._sleep(self._retry.delay_for_attempt(attempt))
+                    attempt += 1
+                    continue
 
-            try:
-                data = response.json()
-            except ValueError as exc:
-                raise PermanentProviderError("invalid JSON response body") from exc
+                if response.status_code >= 300:
+                    err_cls = classify_http_status(response.status_code)
+                    if err_cls is TransientProviderError and attempt < self._retry.max_retries:
+                        retry_after = parse_retry_after(response.headers.get("Retry-After"))
+                        if retry_after is not None:
+                            await self._sleep(retry_after)
+                        else:
+                            await self._sleep(self._retry.delay_for_attempt(attempt))
+                        attempt += 1
+                        continue
+                    raise err_cls(f"provider HTTP {response.status_code} for {model}")
 
-            try:
-                return self._parse_success(model, data, response, started)
-            except PermanentProviderError:
-                raise
-            except Exception as exc:
-                raise PermanentProviderError(f"schema-invalid success payload: {exc}") from exc
+                try:
+                    data = response.json()
+                except ValueError as exc:
+                    raise PermanentProviderError("invalid JSON response body") from exc
+
+                try:
+                    return self._parse_success(model, data, response, started, wire_attempts)
+                except PermanentProviderError:
+                    raise
+                except Exception as exc:
+                    raise PermanentProviderError(f"schema-invalid success payload: {exc}") from exc
+        finally:
+            self.last_wire_attempts = wire_attempts
 
     def _parse_success(
         self,
@@ -133,6 +153,7 @@ class OpenAICompatibleProvider:
         data: Mapping[str, Any],
         response: httpx.Response,
         started: float,
+        wire_attempts: int,
     ) -> ModelResponse:
         choices = data.get("choices")
         if not isinstance(choices, list) or not choices:
@@ -158,12 +179,12 @@ class OpenAICompatibleProvider:
                 reasoning_source = ReasoningSource.PROVIDER
                 break
 
-        usage_raw = data.get("usage") or {}
+        usage_raw = data.get("usage")
+        if not isinstance(usage_raw, Mapping):
+            usage_raw = {}
         usage = TokenUsage(
-            input_tokens=int(usage_raw.get("prompt_tokens") or usage_raw.get("input_tokens") or 0),
-            output_tokens=int(
-                usage_raw.get("completion_tokens") or usage_raw.get("output_tokens") or 0
-            ),
+            input_tokens=_usage_int(usage_raw, "prompt_tokens", "input_tokens"),
+            output_tokens=_usage_int(usage_raw, "completion_tokens", "output_tokens"),
         )
         latency_ms = (time.perf_counter() - started) * 1000.0
         request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
@@ -171,6 +192,7 @@ class OpenAICompatibleProvider:
         model_revision = data.get("model")
         metadata: dict[str, Any] = {
             "provider_kind": self.settings.kind,
+            "wire_attempts": wire_attempts,
         }
         if isinstance(model_revision, str) and model_revision != model.model_id:
             metadata["returned_model"] = model_revision

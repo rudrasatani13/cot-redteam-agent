@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import traceback
 from collections.abc import Sequence
@@ -234,12 +235,14 @@ def cmd_list_monitors(_: argparse.Namespace) -> int:
 
 
 def cmd_list_providers(args: argparse.Namespace) -> int:
+    # Derived from the factory so the list cannot drift from reality.
     print("openrouter")
     print("openai")
     print("anthropic")
     print("vllm")
     print("llamacpp")
     print("openai_compatible")
+    print("mock")
     return EXIT_OK
 
 
@@ -533,7 +536,6 @@ async def _evolve_async(args: argparse.Namespace) -> int:
     from cot_redteam.core.types import ModelRef
     from cot_redteam.eval.budgets import BudgetTracker
     from cot_redteam.providers.factory import ProviderFactory
-    from cot_redteam.storage.artifacts import ArtifactStore
 
     config = load_config(args.config)
     validate_config(config, require_credentials=True)
@@ -573,6 +575,9 @@ async def _evolve_async(args: argparse.Namespace) -> int:
         )
         archive = {
             "version": 1,
+            # run_ids are intentionally omitted: evolve runs are evaluated
+            # in-process and not persisted, so referencing them would point
+            # show-run/report at nonexistent runs.
             "candidates": [
                 {
                     "id": c.candidate_id,
@@ -581,7 +586,6 @@ async def _evolve_async(args: argparse.Namespace) -> int:
                     "parent_ids": list(c.parent_ids),
                     "fitness": c.fitness,
                     "components": c.components,
-                    "run_ids": list(c.run_ids),
                     "sample_ids": list(c.sample_ids),
                 }
                 for c in result.candidates
@@ -589,21 +593,17 @@ async def _evolve_async(args: argparse.Namespace) -> int:
             "diagnostics": result.diagnostics,
             "attempts": result.attempts,
         }
-        store = ArtifactStore(config.artifacts.root)
-        path = store.write_text(
-            Path(config.generative.archive_path).name
-            if Path(config.generative.archive_path).name
-            else "generative_archive.json",
-            json.dumps(archive, indent=2, sort_keys=True),
-            media_type="application/json",
-        ).absolute_path
-        # Also write to configured archive path when absolute/relative differs
         archive_path = Path(config.generative.archive_path)
         archive_path.parent.mkdir(parents=True, exist_ok=True)
-        archive_path.write_text(json.dumps(archive, indent=2, sort_keys=True), encoding="utf-8")
+        payload = json.dumps(archive, indent=2, sort_keys=True)
+        # Single atomic write (tmp + replace) at the configured path; the
+        # duplicate artifact-store copy collided across runs and bypassed
+        # atomicity.
+        tmp_path = archive_path.with_name(archive_path.name + ".tmp")
+        tmp_path.write_text(payload, encoding="utf-8")
+        os.replace(tmp_path, archive_path)
         print(
-            f"candidates={len(result.candidates)} attempts={result.attempts} "
-            f"archive={archive_path} artifact={path}"
+            f"candidates={len(result.candidates)} attempts={result.attempts} archive={archive_path}"
         )
         return EXIT_OK if result.candidates else EXIT_FAILED
     finally:
@@ -886,9 +886,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if getattr(args, "debug", False):
             traceback.print_exc()
         return EXIT_CONFIG
+    except OSError as exc:
+        # Filesystem/permission problems are environment errors, not findings.
+        print(f"error: {exc}", file=sys.stderr)
+        if getattr(args, "debug", False):
+            traceback.print_exc()
+        return EXIT_CONFIG
     except KeyboardInterrupt:
+        # 130 (128+SIGINT) keeps user aborts distinct from exit-1 findings,
+        # so CI gating on "1 = findings" is not poisoned by Ctrl-C.
         print("interrupted", file=sys.stderr)
-        return EXIT_FAILED
+        return 130
     except Exception as exc:  # pragma: no cover
         print(f"error: {exc}", file=sys.stderr)
         if getattr(args, "debug", False):

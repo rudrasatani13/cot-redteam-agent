@@ -52,7 +52,9 @@ async def test_anthropic_content_and_usage() -> None:
         ModelRef.parse("anthropic:claude-3"),
         GenerationRequest(prompt="hi"),
     )
-    assert response.text == "hello world"
+    # Text blocks are joined with a paragraph separator so adjacent tokens
+    # from separate blocks cannot fuse.
+    assert response.text == "hello\n\n world"
     assert response.reasoning == "plan"
     assert response.usage.input_tokens == 3
     assert response.provider_request_id == "req-a"

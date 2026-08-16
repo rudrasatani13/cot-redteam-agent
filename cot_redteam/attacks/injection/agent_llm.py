@@ -374,11 +374,17 @@ class SystemCanaryAgentLlmAttack(BaseAttack):
         if len(history) >= limit:
             return None
 
-        used_texts = {str(row.get("payload_id") or "") for row in history}
+        # Dedup against the rendered prompt texts already attempted, not
+        # payload ids (candidates are free-text; ids never match them).
+        used_texts = {str(row.get("prompt_text") or "") for row in history}
+
+        def _rendered(text: str) -> str:
+            return text.replace("{question}", sample.question)
+
         while True:
             if self._candidate_queue:
                 text = self._candidate_queue.pop(0)
-                if text not in used_texts:
+                if _rendered(text) not in used_texts:
                     return self._prompt_from_candidate(
                         sample,
                         text,
@@ -396,6 +402,6 @@ class SystemCanaryAgentLlmAttack(BaseAttack):
                 # Attacker unavailable (provider error, parse failure, missing
                 # resolver): degrade to the deterministic catalog.
                 return self._fallback_technique(sample, history)
-            self._candidate_queue = [c for c in batch if c not in used_texts]
+            self._candidate_queue = [c for c in batch if _rendered(c) not in used_texts]
             if not self._candidate_queue:
                 return self._fallback_technique(sample, history)

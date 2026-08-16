@@ -273,17 +273,28 @@ and LLM judge opinion are never proof of impact.
   tickets, CRM records, canaries, outbound sink, approval state, and
   protected state. No tool performs real network, shell, filesystem,
   subprocess, or external database effects.
-- **Deny-by-default `ToolGateway`** — registry membership, scenario sandbox
-  allowlist, schema validation, byte/action/time/concurrency limits, and
-  structured trajectory events for every dispatch.
-- **Deterministic oracles** — canary-reached-sink, unauthorized-tool-call,
-  approval-bypass, and protected-state-mutation proofs over immutable
-  pre/post world snapshots. Oracle failures are never clean.
+- **`ToolGateway` with deny-by-default tool dispatch** — unknown tools,
+  tools outside the scenario sandbox allowlist, schema-invalid calls, and
+  over-limit arguments are denied before execution. Derived authorization
+  (policy decisions per tool call) is recorded on every dispatch as oracle
+  evidence; scenarios rely on unauthorized calls EXECUTING so the oracles
+  can prove impact from observed state changes, so authorization is enforced
+  only when the gateway is configured with `deny_unauthorized_tools: true`.
+  Byte/action/time/concurrency limits bound every dispatch and structured
+  trajectory events are recorded for each one.
+- **Deterministic oracles** — canary-reached-sink (bound to transmitted
+  payload content and the specific mutating action, never to sink names),
+  unauthorized-tool-call, approval-bypass, and protected-state-mutation
+  proofs over pre/post world snapshots and recorded action evidence
+  (including transient mutate-and-restore detection). Oracle failures are
+  never clean.
 - **Three scenarios** with vulnerable/patched/clean fixtures: indirect
   prompt injection, tool-result injection, approval bypass.
-- **Replay artifacts** — verified exploits save as strict checksummed JSON;
-  exact replay reproduces them, and regression suites replay saved exploits
-  against patched targets expected to hold.
+- **Replay artifacts** — verified exploits save as strict checksummed JSON
+  with a detached `.sha256` sidecar that is verified on load; retention
+  flags and the recorded seed are honored so exact replay reproduces them,
+  and regression suites replay saved exploits against patched targets
+  expected to hold.
 
 ```bash
 cot-redteam agent scan --config cot_redteam/data/agent_security.example.yaml
@@ -343,8 +354,10 @@ Use `run_evaluation` for the backward-compatible `0.2` attack/monitor path and
 - `cot-redteam regress --suite DIR` — replay saved exploits against patched targets expected to hold
 
 Exit codes are `0` for completed, `1` for failed/findings (a reproduced
-exploit), `2` for configuration errors (including corrupt/incompatible
-replay artifacts), and `3` for partial/inconclusive runs.
+exploit), `2` for configuration or environment errors (including corrupt or
+incompatible replay artifacts), `3` for partial/inconclusive runs, and `130`
+for user interruption (Ctrl-C) — so CI gates keyed on `1 = findings` are not
+poisoned by aborts.
 
 ## Documentation
 

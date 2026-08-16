@@ -196,7 +196,9 @@ if TEXTUAL_AVAILABLE:
             self.state.model = models[0] if models else "-"
             default_attack = "injection.system_canary_agent"
             self.state.attack_id = attacks[0] if attacks else default_attack
-            self.state.attack_explicit = False
+            # A config-declared attack list is an explicit user choice; only
+            # the fallback default defers to the effort presets.
+            self.state.attack_explicit = bool(attacks)
             self.state.effort = "agentic" if "agent" in self.state.attack_id else "adaptive"
             self.state.sandbox = "local-eval"
             attack_cfg = self.session_config.evaluation.attack_config.get(self.state.attack_id, {})
@@ -228,7 +230,7 @@ if TEXTUAL_AVAILABLE:
                         id="command",
                     )
                 yield Static(
-                    "Enter: send  ·  F5: run  ·  F1: help  ·  Ctrl+L: clear  ·  Ctrl+C: quit",
+                    "Enter: send  ·  F5: run  ·  F1: help  ·  Ctrl+L: clear  ·  Ctrl+C: stop/quit",
                     id="keys-bar",
                 )
 
@@ -294,13 +296,9 @@ if TEXTUAL_AVAILABLE:
         def _apply_session_to_config(self) -> AppConfig:
             cfg = _clone_config(self.session_config)
             models = list(self.state.configured_models) or list(cfg.evaluation.models)
-            attacks = (
-                [self.state.attack_id] if self.state.attack_id else list(cfg.evaluation.attacks)
-            )
-            if self.state.attack_explicit:
-                # A /attack choice wins over the effort-derived default; the
-                # effort selector only fills in an attack when the user did
-                # not pick one explicitly.
+            # An explicitly selected attack (config list or /attack) wins;
+            # effort presets only choose a default when nothing is pinned.
+            if self.state.attack_explicit and self.state.attack_id not in {"", "-"}:
                 attacks = [self.state.attack_id]
             elif self.state.effort == "fixed":
                 attacks = ["injection.system_canary"]
@@ -327,12 +325,24 @@ if TEXTUAL_AVAILABLE:
                 stop_on_success=self.state.stop_on_success,
                 bank_path="pkg:system_canary_bank.jsonl",
             )
-            # Budget headroom: models * payloads * samples
+            # Budget headroom: models * payloads * samples. Raising a
+            # configured ceiling must be visible, never silent.
             samples = cfg.evaluation.sample_count or 1
             needed = max(1, len(models) * self.state.max_payloads * samples + 2)
+            configured_max = cfg.evaluation.budgets.max_requests
+            raised_to = max(needed, configured_max or needed)
+            if configured_max is not None and raised_to > configured_max:
+                self.state.push_activity(
+                    "budget",
+                    (
+                        f"max_requests raised {configured_max} -> {raised_to} "
+                        "for the requested models/payloads"
+                    ),
+                    ok=None,
+                )
             budgets = cfg.evaluation.budgets.model_copy(
                 update={
-                    "max_requests": max(needed, cfg.evaluation.budgets.max_requests or needed),
+                    "max_requests": raised_to,
                 }
             )
             evaluation = cfg.evaluation.model_copy(update={"budgets": budgets})
@@ -462,6 +472,8 @@ if TEXTUAL_AVAILABLE:
                 else:
                     self.state.effort = "fixed"
                     self.state.attack_id = "injection.system_canary"
+                # Selecting an effort preset un-pins an explicit /attack choice.
+                self.state.attack_explicit = False
                 self._note(f"effort={self.state.effort} attack={self.state.attack_id}")
                 return
 

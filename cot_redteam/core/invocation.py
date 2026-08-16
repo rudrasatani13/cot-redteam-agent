@@ -19,7 +19,28 @@ Pricing semantics:
   ``UnknownPricingError``;
 - without a cost ceiling, unknown-priced calls proceed but are recorded as
   ``pricing_known=false`` and counted in ``unpriced_requests``; they are
-  never displayed as a known zero cost.
+  never displayed as a known zero cost. Failed invocations with unknown
+  pricing are counted in ``unpriced_requests`` too.
+
+Wire-request accounting:
+
+- provider transports retry transient HTTP failures internally, so one
+  logical invocation can issue several wire requests (up to
+  ``1 + max_retries``);
+- providers report the per-call wire-request count via the
+  ``wire_attempts`` response metadata field and the
+  ``last_wire_attempts`` attribute (see ``providers.base``);
+- the ledger records actual wire requests in
+  ``InvocationRecord.requests`` and emits them in invocation events,
+  while ``BudgetTracker`` continues to count logical requests against
+  ``max_requests`` — the undercount margin is therefore bounded by
+  ``max_retries`` wire requests per logical invocation;
+- tokens and estimated cost come from the final successful attempt only.
+
+Cost semantics: ``InvocationService.estimate_cost`` is the canonical
+pricing path (including cache-token billing). Legacy local estimators
+elsewhere (e.g. the eval engine fallback used when no service is wired)
+may diverge and must not be treated as authoritative.
 """
 
 from __future__ import annotations
@@ -44,6 +65,25 @@ from cot_redteam.providers.base import Provider
 from cot_redteam.providers.factory import ProviderFactory
 
 CostEstimator = Callable[[ModelRef, TokenUsage], Decimal | None]
+
+
+def _wire_attempts(provider: object, response: ModelResponse | None) -> int:
+    """Actual wire requests for the most recent provider call.
+
+    Providers with transport retries report the per-call count via the
+    ``wire_attempts`` response metadata field (accurate per call) and the
+    ``last_wire_attempts`` attribute; the failure path only has the
+    attribute. Providers without transport retries — and plugin or test
+    doubles — fall back to 1, matching the single logical request.
+    """
+    if response is not None:
+        value = response.metadata.get("wire_attempts")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+            return value
+    attempts = getattr(provider, "last_wire_attempts", None)
+    if isinstance(attempts, int) and not isinstance(attempts, bool) and attempts >= 1:
+        return attempts
+    return 1
 
 
 class InvocationRole(str, Enum):
@@ -114,11 +154,14 @@ class InvocationLedger:
         if existing is None:
             self._records[key] = record
             return
+        # Aggregation keeps the FIRST record's provider/model/correlation:
+        # a role spanning multiple providers must not re-stamp the
+        # aggregate with the latest attribution.
         self._records[key] = InvocationRecord(
             role=existing.role,
-            provider=record.provider,
-            model_id=record.model_id,
-            correlation_id=record.correlation_id,
+            provider=existing.provider,
+            model_id=existing.model_id,
+            correlation_id=existing.correlation_id,
             requests=existing.requests + record.requests,
             input_tokens=existing.input_tokens + record.input_tokens,
             output_tokens=existing.output_tokens + record.output_tokens,
@@ -191,15 +234,31 @@ class InvocationService:
         return policy
 
     def estimate_cost(self, model: ModelRef, usage: TokenUsage) -> Decimal | None:
-        """Estimate cost for a usage record, or None when pricing is unknown."""
+        """Estimate cost for a usage record, or None when pricing is unknown.
+
+        Anthropic-style cache tokens are billed against the input price:
+        cache writes at 1.25x (the 5-minute write premium) and cache reads
+        at 0.1x.
+        """
         policy = self.pricing_for(model.provider)
         if not policy.known:
             return None
         million = Decimal(1_000_000)
-        input_price = policy.input_price_per_million or Decimal("0")
-        output_price = policy.output_price_per_million or Decimal("0")
+        input_price = (
+            policy.input_price_per_million
+            if policy.input_price_per_million is not None
+            else Decimal("0")
+        )
+        output_price = (
+            policy.output_price_per_million
+            if policy.output_price_per_million is not None
+            else Decimal("0")
+        )
         return (
-            Decimal(usage.input_tokens) * input_price + Decimal(usage.output_tokens) * output_price
+            Decimal(usage.input_tokens) * input_price
+            + Decimal(usage.output_tokens) * output_price
+            + Decimal(usage.cache_read_input_tokens) * input_price * Decimal("0.1")
+            + Decimal(usage.cache_creation_input_tokens) * input_price * Decimal("1.25")
         ) / million
 
     async def invoke(
@@ -248,13 +307,14 @@ class InvocationService:
             try:
                 response = await provider.generate(model, request)
             except Exception:
+                wire_attempts = _wire_attempts(provider, None)
                 self.ledger.record(
                     InvocationRecord(
                         role=role,
                         provider=model.provider,
                         model_id=model.model_id,
                         correlation_id=correlation_id,
-                        requests=1,
+                        requests=wire_attempts,
                         input_tokens=0,
                         output_tokens=0,
                         estimated_cost=Decimal("0"),
@@ -262,6 +322,8 @@ class InvocationService:
                         failed=True,
                     )
                 )
+                if not policy.known:
+                    self.ledger.unpriced_requests += 1
                 await emit(
                     self.progress,
                     RunEvent(
@@ -274,6 +336,7 @@ class InvocationService:
                             "model": model.model_id,
                             "correlation_id": correlation_id,
                             "budget_requests": self.budget.snapshot().requests,
+                            "wire_attempts": wire_attempts,
                         },
                     ),
                 )
@@ -283,13 +346,14 @@ class InvocationService:
                 response.usage,
                 estimated_cost=estimated_cost,
             )
+            wire_attempts = _wire_attempts(provider, response)
             self.ledger.record(
                 InvocationRecord(
                     role=role,
                     provider=model.provider,
                     model_id=model.model_id,
                     correlation_id=correlation_id,
-                    requests=1,
+                    requests=wire_attempts,
                     input_tokens=response.usage.input_tokens,
                     output_tokens=response.usage.output_tokens,
                     estimated_cost=estimated_cost or Decimal("0"),
@@ -311,6 +375,7 @@ class InvocationService:
                         "model": model.model_id,
                         "correlation_id": correlation_id,
                         "budget_requests": self.budget.snapshot().requests,
+                        "wire_attempts": wire_attempts,
                         "input_tokens": response.usage.input_tokens,
                         "output_tokens": response.usage.output_tokens,
                     },

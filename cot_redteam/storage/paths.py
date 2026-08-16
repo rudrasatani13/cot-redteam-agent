@@ -7,6 +7,12 @@ paths:
 - the path is relative under both POSIX and Windows semantics (Windows
   drive-letter and UNC forms are rejected via ``PureWindowsPath``);
 - the path contains no ``..`` traversal segments;
+- the final component is not a Windows reserved device name
+  (``CON``/``PRN``/``AUX``/``NUL``/``COM1``-``9``/``LPT1``-``9``, matched
+  case-insensitively with any extension), which would collide with a
+  device or behave inconsistently across platforms;
+- on Windows, no component contains ``:`` (an NTFS alternate data
+  stream reference);
 - every parent component of the destination is a real directory, never a
   symlink;
 - the resolved parent of the destination stays strictly inside the pinned
@@ -21,12 +27,20 @@ see ``SECURITY.md``.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from cot_redteam.core.errors import StorageError
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _TRAVERSAL_SEGMENT = ".."
+# Windows reserved device names: valid to create on POSIX but meaningless
+# (or a device) on Windows, with any extension.
+_RESERVED_BASENAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
 
 
 class UnsafePathError(StorageError):
@@ -54,6 +68,15 @@ def validate_relative_path(relative_path: str) -> str:
         raise UnsafePathError("artifact path must name a file, not a directory")
     if _TRAVERSAL_SEGMENT in segments:
         raise UnsafePathError(f"artifact path must not contain '..' segments: {relative_path!r}")
+    if sys.platform == "win32" and any(":" in part for part in segments):
+        raise UnsafePathError(
+            f"artifact path must not contain ':' components "
+            f"(NTFS alternate data stream): {relative_path!r}"
+        )
+    if segments[-1].split(".")[0].upper() in _RESERVED_BASENAMES:
+        raise UnsafePathError(
+            f"artifact path must not use a reserved device name: {relative_path!r}"
+        )
     return "/".join(segments)
 
 
@@ -86,8 +109,14 @@ def ensure_safe_parent(root: Path, relative_path: str) -> Path:
         if current.is_symlink():
             raise UnsafePathError(f"artifact path traverses symlink: {normalized!r}")
         if not current.exists():
-            current.mkdir()
-        elif not current.is_dir():
+            try:
+                current.mkdir()
+            except FileExistsError:
+                # Created concurrently between the exists() check and
+                # mkdir(); tolerated only when it is a real directory,
+                # verified below.
+                pass
+        if not current.is_dir():
             raise UnsafePathError(f"artifact path component is not a directory: {normalized!r}")
     destination = current / segments[-1]
     if destination.is_symlink():
