@@ -374,6 +374,8 @@ poisoned by aborts.
 | [Support](SUPPORT.md) | Where to ask questions or report reproducible bugs |
 | [Contributing](CONTRIBUTING.md) | Development and pull-request workflow |
 | [Security](SECURITY.md) | Private vulnerability reporting and scope |
+| [Roadmap](docs/roadmap.md) | Phased direction for v0.7 and beyond |
+| [AGENTS.md](AGENTS.md) | On-boarding contract for AI coding agents |
 | [Changelog](CHANGELOG.md) | Version history |
 
 ## Development

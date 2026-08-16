@@ -3,7 +3,24 @@
 ## Unreleased
 
 Security- and correctness-focused hardening pass over the full audit of the
-0.6.0 codebase. All gates green: 699 tests, ruff, ruff format, mypy.
+0.6.0 codebase. All gates green: 749 tests, ruff, ruff format, mypy.
+
+### Changed
+
+- **OWASP tags migrated to the GenAI LLM Top 10 (2026)** (published
+  2026-08-04): Excessive Agency is LLM03, Misinformation is LLM07, Hidden
+  Context Exposure is LLM08, Improper Output Handling is LLM10, and the
+  draft-only "Model Theft" entry is gone. The canary family now tags
+  LLM01/LLM02/LLM08, the agent-lane prefix tags LLM03/LLM01, and reports
+  annotate the mapping version on every OWASP line so tag citations cannot
+  silently drift between list releases.
+- `pytest-timeout` added to dev extras and `requirements-dev.lock`
+  (hash-locked); `--timeout` now works locally and in CI.
+- CI test matrix expanded from Ubuntu to **Ubuntu, macOS, and Windows**
+  across Python 3.10-3.13; symlink-dependent artifact-path tests skip on
+  Windows where symlink creation requires privileges.
+- Added `AGENTS.md` (on-boarding contract for AI contributors) and
+  `docs/roadmap.md` (phased direction for v0.7+).
 
 ### Fixed — scoring integrity
 
