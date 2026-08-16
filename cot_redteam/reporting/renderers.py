@@ -8,7 +8,7 @@ import json
 import re
 
 from cot_redteam.reporting.model import ReportModel
-from cot_redteam.reporting.owasp import owasp_tags_for
+from cot_redteam.reporting.owasp import owasp_mapping_version, owasp_tags_for
 
 _LATEX_MAP = {
     "\\": r"\textbackslash{}",
@@ -135,7 +135,7 @@ def render_markdown(report: ReportModel) -> str:
         )
         owasp = owasp_tags_for(item.attack_id)
         if owasp:
-            lines.append(f"- **OWASP LLM Top 10:** {'; '.join(owasp)}")
+            lines.append(f"- **{owasp_mapping_version()}:** {'; '.join(owasp)}")
         if item.error:
             lines.extend(["- **Error:**", "", *_markdown_code(item.error), ""])
         if item.prompt is not None:

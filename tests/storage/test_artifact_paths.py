@@ -72,6 +72,7 @@ def test_windows_unc_write_rejected(tmp_path: Path) -> None:
         store.write_bytes("\\\\server\\share\\escape.json", b"x")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation requires privileges on Windows")
 def test_symlinked_parent_escaping_root_rejected(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -82,6 +83,7 @@ def test_symlinked_parent_escaping_root_rejected(tmp_path: Path) -> None:
     assert not (outside / "escape.json").exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation requires privileges on Windows")
 def test_symlink_destination_rejected(tmp_path: Path) -> None:
     target = tmp_path / "real.bin"
     target.write_bytes(b"real")
@@ -93,6 +95,7 @@ def test_symlink_destination_rejected(tmp_path: Path) -> None:
     assert target.read_bytes() == b"real"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation requires privileges on Windows")
 def test_symlink_in_existing_tree_rejected(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
