@@ -110,6 +110,12 @@ class AgentSecuritySettings(StrictModel):
     output_dir: str = "./results/agent"
     target_model: str | None = None
     system_prompt: str | None = None
+    # Deny dispatch when the trusted scope resolver returns UNAUTHORIZED.
+    # Default false keeps scenarios observe-only: oracles prove impact from
+    # executed unauthorized calls, which enforcement would prevent. Named to
+    # avoid the SENSITIVE_KEY_RE "authorization" marker so manifests don't
+    # have to weaken their redaction allowlist.
+    deny_unauthorized_tools: bool = False
 
     @model_validator(mode="after")
     def _provider_adapter_requires_target_model(self) -> AgentSecuritySettings:
@@ -394,10 +400,29 @@ def load_config(
         config = AppConfig.model_validate(data)
     except Exception as exc:
         message = str(exc)
-        for secret_marker in ("api_key", "secret", "token", "password"):
-            if secret_marker in message.lower() and "api_key_env" not in message:
-                message = "configuration validation failed"
-                break
+        # Pydantic errors embed input values. Nuke the whole message when it
+        # references a credential-bearing field — except the env-var NAME
+        # fields (api_key_env), whose mentions carry no secret material.
+        # Mask the env-var name first so it cannot satisfy the marker check.
+        masked = message.replace("api_key_env", "").replace("api-key-env", "")
+        lowered = masked.lower()
+        secret_markers = (
+            "api_key",
+            "apikey",
+            "access_token",
+            "refresh_token",
+            "authorization",
+            "proxy-authorization",
+            "secret",
+            "token",
+            "password",
+            "cookie",
+            "set-cookie",
+            "session",
+            "bearer",
+        )
+        if any(marker in lowered for marker in secret_markers):
+            message = "configuration validation failed (input values redacted)"
         raise ConfigurationError(f"invalid configuration: {message}") from exc
     return _resolve_runtime_paths(config, config_path)
 
@@ -536,15 +561,13 @@ def redacted_config(config: AppConfig) -> dict[str, Any]:
     providers = data.get("providers", {})
     if isinstance(providers, dict):
         for provider in providers.values():
-            if isinstance(provider, dict) and "api_key" in provider:
-                provider["api_key"] = "***REDACTED***"
-            if isinstance(provider, dict) and provider.get("api_key_env"):
-                # Keep env var name; never materialize secret values.
-                pass
-            if isinstance(provider, dict):
-                headers = provider.get("headers")
-                if isinstance(headers, dict):
-                    provider["headers"] = {str(name): "***REDACTED***" for name in headers}
+            if not isinstance(provider, dict):
+                continue
+            # Providers only carry the env var NAME (api_key_env); headers
+            # may carry raw credential values, so they are always masked.
+            headers = provider.get("headers")
+            if isinstance(headers, dict):
+                provider["headers"] = {str(name): "***REDACTED***" for name in headers}
     return data
 
 

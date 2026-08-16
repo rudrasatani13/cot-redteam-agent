@@ -29,6 +29,11 @@ class EndpointPolicyError(ValueError):
     """Raised when a URL or resolved address violates an endpoint policy."""
 
 
+# Well-known NAT64 prefix: the embedded IPv4 address lives in the low 32
+# bits and must be policy-checked like any other IPv4 address.
+_NAT64_NETWORK = ipaddress.IPv6Network("64:ff9b::/96")
+
+
 @dataclass(frozen=True)
 class URLValidation:
     scheme: str
@@ -78,17 +83,41 @@ class EndpointPolicy:
             raise EndpointPolicyError(
                 f"host {host!r} not allowed; allowed: {', '.join(sorted(self.allowed_hosts))}"
             )
-        if self.allowed_ports and parsed.port not in self.allowed_ports:
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            # Out-of-range ports raise bare ValueError from urlparse.
+            raise EndpointPolicyError(f"URL {url!r} has an invalid port: {exc}") from exc
+        if self.allowed_ports and port not in self.allowed_ports:
             raise EndpointPolicyError(
-                f"port {parsed.port!r} not allowed; allowed: "
+                f"port {port!r} not allowed; allowed: "
                 f"{', '.join(str(p) for p in sorted(self.allowed_ports))}"
             )
         return URLValidation(
             scheme=parsed.scheme,
             host=host,
-            port=parsed.port,
+            port=port,
             path=parsed.path,
         )
+
+    @staticmethod
+    def _normalized_addresses(
+        ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    ) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]:
+        """An address plus any embedded IPv4 form.
+
+        IPv4-mapped (``::ffff:0:0/96``) and NAT64 (``64:ff9b::/96``)
+        addresses embed an IPv4 address that range checks must see;
+        otherwise a blocked IPv4 target could sneak through as IPv6.
+        """
+        candidates: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = [ip]
+        if isinstance(ip, ipaddress.IPv6Address):
+            mapped = ip.ipv4_mapped
+            if mapped is not None:
+                candidates.append(mapped)
+            elif ip in _NAT64_NETWORK:
+                candidates.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+        return tuple(candidates)
 
     def validate_resolved_addresses(
         self,
@@ -106,16 +135,22 @@ class EndpointPolicy:
                 if isinstance(raw, (ipaddress.IPv4Address, ipaddress.IPv6Address))
                 else ipaddress.ip_address(raw)
             )
-            if ip.is_loopback and not self.allow_loopback:
-                raise EndpointPolicyError(f"resolved address {ip} for {host!r} is loopback")
-            if ip.is_link_local and not self.allow_link_local:
-                raise EndpointPolicyError(f"resolved address {ip} for {host!r} is link-local")
-            if ip.is_multicast and not self.allow_multicast:
-                raise EndpointPolicyError(f"resolved address {ip} for {host!r} is multicast")
-            if ip.is_unspecified and not self.allow_unspecified:
-                raise EndpointPolicyError(f"resolved address {ip} for {host!r} is unspecified")
-            if ip.is_private and not self.allow_private:
-                raise EndpointPolicyError(f"resolved address {ip} for {host!r} is private")
+            for candidate in self._normalized_addresses(ip):
+                label = str(ip) if candidate is ip else f"{candidate} (embedded in {ip})"
+                if candidate.is_loopback and not self.allow_loopback:
+                    raise EndpointPolicyError(f"resolved address {label} for {host!r} is loopback")
+                if candidate.is_link_local and not self.allow_link_local:
+                    raise EndpointPolicyError(
+                        f"resolved address {label} for {host!r} is link-local"
+                    )
+                if candidate.is_multicast and not self.allow_multicast:
+                    raise EndpointPolicyError(f"resolved address {label} for {host!r} is multicast")
+                if candidate.is_unspecified and not self.allow_unspecified:
+                    raise EndpointPolicyError(
+                        f"resolved address {label} for {host!r} is unspecified"
+                    )
+                if candidate.is_private and not self.allow_private:
+                    raise EndpointPolicyError(f"resolved address {label} for {host!r} is private")
 
     def validate_redirect(self, from_url: str, to_url: str) -> URLValidation:
         """Revalidate a redirect target against this policy."""

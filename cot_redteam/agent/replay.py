@@ -15,6 +15,7 @@ Replay outcome semantics:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -24,7 +25,7 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from cot_redteam.agent.config import AgentSecuritySettings
+from cot_redteam.agent.config import AgentRetentionSettings, AgentSecuritySettings
 from cot_redteam.agent.oracles.support import support_oracle
 from cot_redteam.agent.scenarios.support import support_fixture, support_scenario
 from cot_redteam.agent.types import (
@@ -41,6 +42,8 @@ from cot_redteam.core.errors import CotRedTeamError
 from cot_redteam.core.serialization import canonical_json, sha256_text
 
 MAX_REPLAY_BYTES = 16 * 1024 * 1024
+#: Bound on the detached ``.sha256`` sidecar file read.
+MAX_DETACHED_CHECKSUM_BYTES = 4096
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -50,6 +53,16 @@ EXIT_PARTIAL = 3
 _GIT_REVISION_RE = re.compile(r"[0-9a-f]{40}\Z")
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
 _TARGET_FIELDS = frozenset({"id", "original_version", "family"})
+#: Retention flags that alter the RECORDED trajectory content (and therefore
+#: its digest).  Only ``retain_final_response`` changes what targets record
+#: (see ``agent/targets/scripted.py``); the other flags sanitize at storage
+#: boundaries only and never affect the trajectory digest.
+_RETENTION_INPUT_FIELDS = frozenset({"retain_final_response"})
+#: Regression-suite expectation contracts: vulnerable fixtures must be
+#: expected to reproduce the exploit; patched/clean (hold-style) fixtures
+#: must be expected to hold (never prove an exploit).
+_EXPLOIT_OUTCOMES = frozenset({"VERIFIED_EXPLOIT"})
+_HOLD_STYLE_OUTCOMES = frozenset({"INVARIANT_HELD", "INCONCLUSIVE"})
 
 
 class ReplayError(CotRedTeamError):
@@ -184,6 +197,29 @@ def _oracle_results_digest(
     return sha256_text(canonical_json(projection))
 
 
+def _recorded_retention_flag(
+    run: AgentRun,
+    settings: AgentSecuritySettings | None,
+) -> bool | None:
+    """Resolve the load-bearing retention flag the run actually used.
+
+    ``retain_final_response`` changes the recorded FinalResponse content and
+    therefore the trajectory digest; replaying without it would spuriously
+    change the digest.  Prefer the caller-provided settings (the API path
+    always supplies them); fall back to the run's own recorded metadata.
+    """
+    if settings is not None:
+        return bool(settings.retention.retain_final_response)
+    metadata = run.metadata if isinstance(run.metadata, dict) else {}
+    retained = metadata.get("retained")
+    if isinstance(retained, dict) and "final_response" in retained:
+        value = retained["final_response"]
+        if type(value) is not bool:
+            raise ReplayError("invalid run retention metadata: final_response must be a boolean")
+        return value
+    return None
+
+
 def build_replay_artifact(
     run: AgentRun,
     *,
@@ -192,12 +228,18 @@ def build_replay_artifact(
     settings: AgentSecuritySettings | None = None,
 ) -> dict[str, Any]:
     """Build a strict replay artifact dict for a verified-exploit run."""
-    del settings
     sanitized_inputs: dict[str, Any] = {}
     if "seed" in run.metadata:
         seed = run.metadata["seed"]
         _validate_seed_value(seed)
         sanitized_inputs["seed"] = seed
+    retain_final_response = _recorded_retention_flag(run, settings)
+    if retain_final_response is not None:
+        # Load-bearing retention settings are declarative replay inputs:
+        # replay must reconstruct the exact recorded trajectory content.
+        sanitized_inputs["retention"] = {
+            "retain_final_response": retain_final_response,
+        }
     base = {
         "schema_version": REPLAY_SCHEMA_VERSION,
         "replay_id": f"replay-{run.run_id}",
@@ -238,6 +280,50 @@ def compute_payload_digest(artifact: dict[str, Any]) -> str:
     return sha256_text(canonical_json(payload))
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """object_pairs_hook rejecting duplicate JSON object keys.
+
+    A duplicated key silently overwrites the first occurrence, which could
+    hide a tampered value behind a validated one.
+    """
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key {key!r}")
+        result[key] = value
+    return result
+
+
+def _load_strict_json(raw: str) -> Any:
+    return json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+
+
+def _verify_detached_checksum(artifact_path: Path, raw: bytes) -> None:
+    """Verify the sibling ``<artifact>.sha256`` sidecar when it exists.
+
+    ``save_replay_artifact`` writes a sha256sum-style sidecar next to every
+    artifact; when one is present the raw bytes must match it before
+    parsing.  A missing sidecar (legacy layouts) keeps current behavior.
+    """
+    sidecar = Path(f"{artifact_path}.sha256")
+    if not sidecar.exists():
+        return
+    try:
+        recorded = sidecar.read_bytes()[:MAX_DETACHED_CHECKSUM_BYTES].decode(
+            "utf-8", errors="replace"
+        )
+    except OSError as exc:
+        raise ReplayError(f"cannot read detached checksum {sidecar}: {exc}") from exc
+    recorded_digest = recorded.split()[0].strip() if recorded.split() else ""
+    if not _DIGEST_RE.fullmatch(recorded_digest):
+        raise ReplayError("detached replay checksum is malformed")
+    actual_digest = hashlib.sha256(raw).hexdigest()
+    if recorded_digest != actual_digest:
+        raise ReplayError(
+            f"detached replay checksum mismatch: artifact bytes do not match {sidecar}"
+        )
+
+
 def load_replay(path: str | Path) -> ReplayArtifactV1:
     """Size-bounded, strict, checksum-validated replay loading."""
     artifact_path = Path(path)
@@ -248,9 +334,11 @@ def load_replay(path: str | Path) -> ReplayArtifactV1:
     if size > MAX_REPLAY_BYTES:
         raise ReplayError(f"replay artifact exceeds {MAX_REPLAY_BYTES} bytes")
     try:
-        raw = artifact_path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-    except (OSError, json.JSONDecodeError) as exc:
+        raw = artifact_path.read_bytes()
+        _verify_detached_checksum(artifact_path, raw)
+        data = _load_strict_json(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        # ValueError covers json.JSONDecodeError and duplicate-key rejects.
         raise ReplayError(f"cannot parse replay artifact {artifact_path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ReplayError("replay artifact root must be a JSON object")
@@ -381,6 +469,32 @@ def _validate_seed_value(value: object) -> None:
         raise ReplayError("invalid replay seed: expected an integer")
 
 
+def _recorded_retention(artifact: ReplayArtifactV1) -> AgentRetentionSettings | None:
+    """Strictly parse the recorded load-bearing retention flags.
+
+    Returns ``None`` for legacy artifacts recorded before retention inputs
+    existed (they keep current behavior).  Unknown flags are rejected: a
+    replay must never guess the semantics of unrecorded settings.
+    """
+    if "retention" not in artifact.sanitized_inputs:
+        return None
+    recorded = artifact.sanitized_inputs["retention"]
+    if not isinstance(recorded, dict):
+        raise ReplayError("invalid replay retention inputs: expected an object")
+    unknown = set(recorded).difference(_RETENTION_INPUT_FIELDS)
+    if unknown:
+        raise ReplayError(f"invalid replay retention inputs: unknown fields {sorted(unknown)!r}")
+    values: dict[str, bool] = {}
+    for field in _RETENTION_INPUT_FIELDS:
+        if field not in recorded:
+            continue
+        value = recorded[field]
+        if type(value) is not bool:
+            raise ReplayError(f"invalid replay retention inputs: {field} must be a boolean")
+        values[field] = value
+    return AgentRetentionSettings(**values)
+
+
 def _recorded_budget_settings(artifact: ReplayArtifactV1) -> BudgetSettings:
     try:
         return BudgetSettings.model_validate(artifact.budget_configuration, strict=True)
@@ -392,7 +506,7 @@ def _validate_artifact_contract(
     artifact: ReplayArtifactV1,
     *,
     exact: bool,
-) -> BudgetSettings:
+) -> tuple[BudgetSettings, AgentRetentionSettings | None]:
     """Validate fields that must be trusted before registry resolution/execution."""
     if exact and artifact.original_outcome != AgentOutcome.VERIFIED_EXPLOIT.value:
         raise ReplayError("incompatible exact replay: original_outcome must be 'verified_exploit'")
@@ -410,7 +524,7 @@ def _validate_artifact_contract(
         _validate_digest(artifact.oracle_results_digest, field="oracle_results_digest")
     if "seed" in artifact.sanitized_inputs:
         _validate_seed_value(artifact.sanitized_inputs["seed"])
-    return _recorded_budget_settings(artifact)
+    return _recorded_budget_settings(artifact), _recorded_retention(artifact)
 
 
 def _resolve_replay_settings(
@@ -418,13 +532,19 @@ def _resolve_replay_settings(
     exact: bool,
     settings: AgentSecuritySettings | None,
     recorded_budgets: BudgetSettings,
+    recorded_retention: AgentRetentionSettings | None,
 ) -> AgentSecuritySettings | None:
-    """Apply recorded budgets only to exact replays; regressions may override them."""
+    """Apply recorded budgets (exact replays) and recorded load-bearing
+    retention flags; regressions may override both with caller settings."""
     if not exact:
+        if settings is None and recorded_retention is not None:
+            return AgentSecuritySettings(retention=recorded_retention)
         return settings
     expected = recorded_budgets.model_dump(mode="python")
     if settings is None:
-        return AgentSecuritySettings(budgets=recorded_budgets)
+        if recorded_retention is None:
+            return AgentSecuritySettings(budgets=recorded_budgets)
+        return AgentSecuritySettings(budgets=recorded_budgets, retention=recorded_retention)
     try:
         actual = settings.budgets.model_dump(mode="python")
     except Exception as exc:
@@ -433,6 +553,14 @@ def _resolve_replay_settings(
         raise ReplayError(
             "incompatible exact replay budget_configuration: "
             f"artifact has {expected!r}, caller has {actual!r}"
+        )
+    if recorded_retention is not None and (
+        settings.retention.retain_final_response != recorded_retention.retain_final_response
+    ):
+        raise ReplayError(
+            "incompatible exact replay retention: artifact has "
+            f"retain_final_response={recorded_retention.retain_final_response!r}, "
+            f"caller has {settings.retention.retain_final_response!r}"
         )
     return settings
 
@@ -598,11 +726,12 @@ async def run_replay(
     fixture digest.
     """
     exact = fixture is None
-    recorded_budgets = _validate_artifact_contract(artifact, exact=exact)
+    recorded_budgets, recorded_retention = _validate_artifact_contract(artifact, exact=exact)
     effective_settings = _resolve_replay_settings(
         exact=exact,
         settings=settings,
         recorded_budgets=recorded_budgets,
+        recorded_retention=recorded_retention,
     )
     resolved_seed = _resolve_replay_seed(artifact, exact=exact, seed=seed)
     scenario_id = artifact.scenario.id
@@ -715,13 +844,57 @@ class RegressionSuite:
     entries: tuple[RegressionEntry, ...]
 
 
+def _validate_regression_expectation(target_fixture: str, expected: str) -> None:
+    """Validate the expected outcome against the target fixture kind.
+
+    Vulnerable fixtures must be expected to reproduce the verified exploit;
+    patched/clean (hold-style) fixtures must be expected to hold or stay
+    inconclusive — a suite that expects an exploit against a patched target
+    is a misconfiguration, not a runnable expectation.  Unknown fixture
+    kinds are rejected later by ``run_replay`` (unknown fixture).
+    """
+    normalized = expected.upper()
+    if target_fixture == "vulnerable":
+        allowed = _EXPLOIT_OUTCOMES
+    elif target_fixture in ("patched", "clean"):
+        allowed = _HOLD_STYLE_OUTCOMES
+    else:
+        return
+    if normalized not in allowed:
+        raise ReplayError(
+            f"invalid regression expectation: target {target_fixture!r} cannot expect "
+            f"{expected!r}; allowed: {', '.join(sorted(allowed))}"
+        )
+
+
+def _resolve_suite_artifact(directory: Path, artifact: str) -> Path:
+    """Resolve a suite entry's artifact path with strict containment.
+
+    Artifact references must be relative, must not traverse upward, must not
+    carry control characters, and must resolve INSIDE the suite directory
+    (symlinks are followed via ``resolve()`` so they cannot escape either).
+    """
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in artifact):
+        raise ReplayError(f"regression artifact path contains control characters: {artifact!r}")
+    candidate = Path(artifact)
+    if candidate.is_absolute():
+        raise ReplayError(f"regression artifact path must be relative: {artifact!r}")
+    if any(part == ".." for part in candidate.parts):
+        raise ReplayError(f"regression artifact path must not traverse upward: {artifact!r}")
+    resolved_root = directory.resolve()
+    resolved = (directory / candidate).resolve()
+    if resolved == resolved_root or not resolved.is_relative_to(resolved_root):
+        raise ReplayError(f"regression artifact path escapes the suite directory: {artifact!r}")
+    return resolved
+
+
 def load_regression_suite(suite_dir: str | Path) -> RegressionSuite:
     """Load a declarative regression suite (suite.json + replay artifacts)."""
     directory = Path(suite_dir)
     manifest_path = directory / "suite.json"
     try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        data = _load_strict_json(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
         raise ReplayError(f"cannot load regression suite {manifest_path}: {exc}") from exc
     if not isinstance(data, dict) or data.get("schema_version") != 1:
         raise ReplayError("regression suite requires schema_version=1")
@@ -737,7 +910,8 @@ def load_regression_suite(suite_dir: str | Path) -> RegressionSuite:
         expected = str(raw.get("expected") or "")
         if not artifact or not target or not expected:
             raise ReplayError(f"incomplete regression entry: {raw!r}")
-        artifact_path = directory / artifact
+        _validate_regression_expectation(target, expected)
+        artifact_path = _resolve_suite_artifact(directory, artifact)
         if not artifact_path.exists():
             raise ReplayError(f"regression artifact missing: {artifact_path}")
         entries.append(
@@ -773,12 +947,18 @@ async def run_regression_suite(
     suite_dir: str | Path,
     *,
     settings: AgentSecuritySettings | None = None,
-    seed: int = 42,
+    seed: int | None = None,
 ) -> RegressionReport:
+    """Run every suite entry against its target fixture.
+
+    ``seed=None`` (the default) uses each artifact's recorded seed, falling
+    back to 42 for legacy artifacts without one; an explicit seed overrides
+    every entry (the historical ``seed=42`` behavior).
+    """
     suite = load_regression_suite(suite_dir)
     results: list[tuple[RegressionEntry, ReplayResult]] = []
     for entry in suite.entries:
-        artifact = load_replay(Path(suite_dir) / entry.artifact)
+        artifact = load_replay(_resolve_suite_artifact(Path(suite_dir), entry.artifact))
         result = await run_replay(
             artifact,
             fixture=entry.target_fixture,

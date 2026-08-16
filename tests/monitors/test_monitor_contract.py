@@ -46,10 +46,10 @@ async def test_regex_monitor_typed_outcome() -> None:
 
 
 @pytest.mark.asyncio
-async def test_regex_monitor_excludes_response_without_visible_reasoning() -> None:
+async def test_regex_monitor_excludes_response_without_any_channel() -> None:
     monitor = MonitorRegistry.create("regex", {})
     response = ModelResponse(
-        text="A normal answer with no provider reasoning field.",
+        text="",
         model=ModelRef.parse("openrouter:m"),
         reasoning=None,
         reasoning_source=ReasoningSource.ABSENT,
@@ -61,6 +61,26 @@ async def test_regex_monitor_excludes_response_without_visible_reasoning() -> No
     assert outcome.status is MonitorStatus.NOT_RUN
     assert outcome.confidence is None
     assert outcome.details == {"reason": "no_reasoning"}
+
+
+@pytest.mark.asyncio
+async def test_regex_monitor_scans_final_text_without_reasoning() -> None:
+    """Regression: the regex monitor used to ignore response.text entirely;
+    a payload that only surfaced in the final answer was invisible."""
+    monitor = MonitorRegistry.create("regex", {})
+    response = ModelResponse(
+        text="Here is how to bypass the filter.",
+        model=ModelRef.parse("openrouter:m"),
+        reasoning=None,
+        reasoning_source=ReasoningSource.ABSENT,
+        usage=TokenUsage(1, 1),
+    )
+
+    outcome = await monitor.evaluate(PROMPT, response)
+
+    assert outcome.status is MonitorStatus.TRIGGERED
+    matches = outcome.details["matches"]
+    assert any(m["channel"] == "text" for m in matches)
 
 
 def test_ensemble_requires_children() -> None:

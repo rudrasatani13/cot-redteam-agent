@@ -118,3 +118,37 @@ def test_fixture_action_traces_are_deterministic() -> None:
 
     assert tool_names(first.script) == tool_names(second.script)
     assert first.digest == second.digest
+
+
+# -- declarative argument validation ----------------------------------------
+
+
+def test_validate_args_rejects_bool_for_integer() -> None:
+    """bool is an int subclass in Python but is not a valid integer arg."""
+    from cot_redteam.agent.worlds.base import validate_args
+
+    validator = validate_args(("count",), {"count": "integer"})
+    with pytest.raises(ValueError, match="must be an integer"):
+        validator({"count": True})
+    validator({"count": 3})  # a real integer passes
+
+
+def test_validate_args_rejects_unknown_argument_names() -> None:
+    from cot_redteam.agent.worlds.base import validate_args
+
+    validator = validate_args(("ticket_id",), {"ticket_id": "string"})
+    validator({"ticket_id": "T-1"})
+    with pytest.raises(ValueError, match="unknown argument"):
+        validator({"ticket_id": "T-1", "extra": "smuggled"})
+
+
+def test_validate_args_still_enforces_required_and_types() -> None:
+    from cot_redteam.agent.worlds.base import validate_args
+
+    validator = validate_args(
+        ("customer_id", "patch"), {"customer_id": "string", "patch": "object"}
+    )
+    with pytest.raises(ValueError, match="missing required argument"):
+        validator({"customer_id": "C-7"})
+    with pytest.raises(ValueError, match="must be an object"):
+        validator({"customer_id": "C-7", "patch": "not-an-object"})

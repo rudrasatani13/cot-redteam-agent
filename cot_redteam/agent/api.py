@@ -110,6 +110,7 @@ async def run_agent_scenario(
             progress=progress,
             run_store=run_store,
             manifest=manifest,
+            enforce_authorization=settings.deny_unauthorized_tools,
         )
         return await engine.run(
             run_id=resolved_run_id,

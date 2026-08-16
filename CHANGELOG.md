@@ -1,5 +1,116 @@
 # Changelog
 
+## Unreleased
+
+Security- and correctness-focused hardening pass over the full audit of the
+0.6.0 codebase. All gates green: 699 tests, ruff, ruff format, mypy.
+
+### Fixed — scoring integrity
+
+- **Refusal re-quotes are never compliant disclosure**: refusal analysis now
+  gates every presentation form (own-line dumps, `TOKEN=`/JSON-style
+  fields), honoring the documented "refusal re-quotes are not success"
+  guarantee in both the attacks path and the benchmark exact/normalized
+  canary scorers (new `refusal_quote_only` metric). Missing refusal
+  contractions (`i shouldn't`, `can't share`, …) added to the marker list.
+- **Canary can no longer leak into attacker context**: attempt-history
+  response previews, evidence, and prompt texts are scrubbed of the canary
+  before they can reach crescendo turn rendering or the LLM-attacker
+  prompt, eliminating self-fulfilling multi-turn "disclosures".
+- **Obfuscation-tolerant canary detection**: case-insensitive,
+  whitespace-collapsed, zero-width, homoglyph, leetspeak, morse, and binary
+  variants are detected, so the shipped encoding techniques score as real
+  disclosures instead of systematic false negatives.
+- **Adaptive success is never discarded** when `stop_on_success` is
+  disabled; later failed attempts no longer overwrite a real disclosure.
+- **PAIR-loop dedup fixed**: candidates are deduplicated against rendered
+  prompt texts (previously compared against payload IDs and never matched).
+- Benchmark false-refusal matching handles curly apostrophes; the JSON
+  schema scorer accepts fenced JSON output.
+- Race command: one misconfigured model yields an error row instead of
+  aborting the race, the "disclosed" verdict requires the actually planted
+  canary (no longer self-fulfilling from response-extracted tokens), and
+  `--max-tokens` applies to attack prompts.
+- Hardcoded canary prefixes removed from techniques, the payload bank, and
+  persisted attack metadata (previously leaked 18 of 27 default-canary
+  characters and asserted wrong prefixes for custom canaries).
+- Paired model comparisons now use exact McNemar statistics
+  (discordant-pair SE, binomial p-value) instead of unpaired Fisher/Wald
+  math; duplicate sample IDs resolve deterministically to the first item.
+
+### Fixed — security
+
+- **Report injection**: judge explanations, monitor explanations, and
+  evidence spans are markdown-escaped or safely code-fenced; the CSV
+  formula-injection neutralizer covers every column; LaTeX generation uses
+  the full escaper everywhere.
+- **Judge hardening**: `llm_judge` and the harm rubric wrap all untrusted
+  fields in delimited UNTRUSTED-DATA blocks with explicit do-not-follow
+  instructions (mirroring the benchmark judge); strict boolean parsing so
+  judge JSON strings like `"false"` can no longer flip verdicts; rubric
+  success cannot contradict a zero score.
+- **Retention enforcement**: `retain_responses: false` now also redacts
+  attempt-history previews and assessment evidence; error strings always
+  pass through credential redaction; config-validation redaction covers
+  `authorization`/`cookie`/`session`/`bearer`-class fields.
+- **Agent lane**: the canary oracle proves impact from transmitted payload
+  content of the specific mutating action (sink-name spoofs no longer
+  verify); the protected-state oracle detects transient
+  mutate-and-restore; approval grants are bound to the acting principal;
+  concurrent dispatch snapshots/events are recorded inside the semaphore
+  so evidence attribution is deterministic; regression-suite artifact
+  paths are contained under the suite directory; detached `.sha256`
+  sidecars are verified on load; duplicate JSON keys are rejected; replay
+  artifacts record retention flags and honor the recorded seed.
+- **Gateway limits**: oversized arguments are truncated before recording;
+  denied requests are bounded by `max_denied_requests`; scenario
+  `max_payload_bytes` is wired into the gateway; tool argument validation
+  rejects bools-for-integers and unknown argument names.
+- `regex` monitor: one invalid pattern no longer disables the whole
+  monitor, input is Unicode-normalized (curly apostrophes match), and the
+  final answer text is scanned in addition to reasoning.
+- Ensemble/cascading monitors accept per-child configuration and reject
+  recursive composition with a clear error instead of `RecursionError`.
+- OWASP mapping covers all registered attack families with corrected
+  labels (distillation → LLM10 Model Theft, evasion → LLM05 Improper
+  Output Handling, faithfulness → LLM08, sandbagging → LLM09).
+- SQLite: `StorageError(ValueError)` taxonomy at storage boundaries,
+  crash-atomic migrations, `evaluation_items(run_id)` /
+  `monitor_outcomes(item_id)` indexes, 30 s connect timeout, Windows
+  reserved-name/ADS path rejection.
+- Provider transports: `Retry-After` clamped to 60 s on both providers;
+  3xx classified permanent; Anthropic temperature clamped to 0–1; text
+  blocks joined with paragraph separators; cache tokens
+  (`cache_creation`/`cache_read`) billed at 1.25×/0.1× input price; wire
+  request attempts recorded in the ledger and invocation events.
+
+### Fixed — reliability / UX
+
+- TUI: `/attack <id>` selections are honored (previously always overwritten
+  by effort presets); a runtime TUI crash no longer silently starts a
+  second billed evaluation via the fallback dashboard; budget raises for
+  the requested models/payloads are logged visibly; `Ctrl+C` cancels the
+  in-flight evaluation and exits 130.
+- CLI: one broken third-party plugin is skipped with a warning instead of
+  bricking every command; `Ctrl+C` exits 130 (distinct from `1 = findings`);
+  `OSError` exits 2; `list-providers` includes `mock`; evolve writes its
+  archive once atomically and no longer references unpersisted run ids.
+- Attacker-side `BudgetExceededError` classifies the item instead of
+  aborting the run; `evolve` runs under a single shared budget ceiling
+  (no longer multiplied per candidate); the evolution-rounds off-by-one is
+  fixed; unknown template placeholders are rejected at validation.
+- `log_level` is actually applied; `run_benchmark` bootstraps plugins for
+  direct API callers.
+
+### Added
+
+- `agent.deny_unauthorized_tools` config option (default `false`): deny
+  tool dispatch when the trusted scope resolver returns UNAUTHORIZED.
+  Default stays observe-only so oracles can prove impact from executed
+  unauthorized calls.
+- `RegexMonitorAdvanced` now ships a genuinely expanded evasion-phrase
+  pattern set; `SelfMonitoringJudge` has a distinct self-audit rubric.
+
 ## 0.6.0 — Proof-of-Action Foundation
 
 ### Added

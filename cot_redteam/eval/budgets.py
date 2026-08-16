@@ -69,14 +69,11 @@ class BudgetTracker:
         async with self._lock:
             if self._exceeded:
                 raise BudgetExceededError("budget already exceeded")
+            # _check_limits_unlocked already rejects when the request count
+            # is at (or above) max_requests, so reserving one more here can
+            # never exceed the limit.
             self._check_limits_unlocked()
             # Reserve by incrementing request count before the call.
-            if (
-                self.settings.max_requests is not None
-                and self._requests + 1 > self.settings.max_requests
-            ):
-                self._exceeded = True
-                raise BudgetExceededError("max_requests exceeded")
             self._requests += 1
 
     async def record_response(

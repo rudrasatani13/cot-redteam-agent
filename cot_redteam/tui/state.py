@@ -43,6 +43,9 @@ class TuiState:
     attempt: int = 0
     attempts_total: int = 0
     effort: str = "agentic"
+    # True once an attack was chosen explicitly (config list or /attack);
+    # effort-based defaults must not override an explicit selection.
+    attack_explicit: bool = False
     sandbox: str = "local-eval"
     max_payloads: int = 24
     stop_on_success: bool = True

@@ -29,7 +29,7 @@ def _store(tmp_path: Path) -> SQLiteRunStore:
 def test_migration_3_applied_from_fresh_db(tmp_path: Path) -> None:
     store = _store(tmp_path)
     versions = [row[0] for row in store.connection.execute("SELECT version FROM schema_migrations")]
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
     tables = {
         row[0]
         for row in store.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -166,9 +166,9 @@ def test_events_append_only_no_duplicates(tmp_path: Path) -> None:
             ).fetchall()
             assert rows == []
             # A second append of the same envelope must fail (append-only).
-            from cot_redteam.storage.sqlite import sqlite3
+            from cot_redteam.core.errors import StorageError
 
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(StorageError):
                 store.append_agent_events(
                     run.run_id,
                     [
@@ -229,9 +229,9 @@ def test_failed_append_rolls_back_entire_batch(tmp_path: Path) -> None:
                 "step_kind": "x",
                 "input_source": "y",
             }
-            from cot_redteam.storage.sqlite import sqlite3
+            from cot_redteam.core.errors import StorageError
 
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(StorageError):
                 store.append_agent_events(
                     run.run_id, [good, duplicate], retention=AgentRetentionSettings()
                 )

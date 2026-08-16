@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import sys
 from collections.abc import Iterable
 
 from cot_redteam.core.errors import PluginError
@@ -46,11 +47,14 @@ def _load_entry_points(group: str) -> None:
         try:
             ep.load()
         except Exception as exc:
+            # One broken third-party distribution must not brick every CLI
+            # command: warn and keep loading the remaining plugins.
             dist = getattr(ep, "dist", None)
             dist_name = dist.name if dist is not None else "unknown"
-            raise PluginError(
-                f"failed to load entry point {ep.name!r} from distribution {dist_name!r}: {exc}"
-            ) from exc
+            print(
+                f"warning: skipping entry point {ep.name!r} from distribution {dist_name!r}: {exc}",
+                file=sys.stderr,
+            )
 
 
 def bootstrap_plugins(*, force: bool = False) -> None:

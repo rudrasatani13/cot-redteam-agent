@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -39,6 +40,26 @@ from cot_redteam.eval.planner import PlannedItem, RunPlan
 from cot_redteam.monitors.base import BaseMonitor
 from cot_redteam.plugins.registry import PluginContext, Registry
 from cot_redteam.providers.factory import ProviderFactory
+
+
+def _scrub_secret(text: str, secret: str | None) -> str:
+    """Remove a secret token from text destined for attack history.
+
+    Attempt-history response previews feed later attacker prompts (crescendo
+    turn rendering, the LLM attacker context). Leaving the canary in them
+    would hand the secret to the next attacker turn and let any echo of it
+    be scored as a fresh disclosure.
+    """
+    if not text or not secret or len(secret) < 8:
+        return text
+    return re.sub(re.escape(secret), "[redacted]", text, flags=re.IGNORECASE)
+
+
+def _attack_secret(attack: BaseAttack) -> str | None:
+    secret = getattr(attack, "canary", None)
+    if isinstance(secret, str) and secret.strip():
+        return secret.strip()
+    return None
 
 
 class EvaluationEngine:
@@ -366,6 +387,27 @@ class EvaluationEngine:
         )
         return enriched_prompt, enriched_assessment
 
+    @staticmethod
+    def _select_final_attempt(
+        last_prompt: AttackPrompt | None,
+        last_response: ModelResponse | None,
+        last_assessment: AttackAssessment | None,
+        success_prompt: AttackPrompt | None,
+        success_response: ModelResponse | None,
+        success_assessment: AttackAssessment | None,
+        successful_payload_id: str | None,
+    ) -> tuple[AttackPrompt | None, ModelResponse | None, AttackAssessment | None]:
+        """Prefer a successful attempt triple over a later failed one."""
+        if (
+            successful_payload_id is not None
+            and success_prompt is not None
+            and success_response is not None
+            and success_assessment is not None
+            and not (last_assessment is not None and last_assessment.success)
+        ):
+            return success_prompt, success_response, success_assessment
+        return last_prompt, last_response, last_assessment
+
     async def _execute_item(self, plan: RunPlan, item: PlannedItem) -> EvaluationItem:
         started = datetime.now(timezone.utc)
         await emit(
@@ -417,19 +459,51 @@ class EvaluationEngine:
         last_prompt: AttackPrompt | None = None
         last_response: ModelResponse | None = None
         last_assessment: AttackAssessment | None = None
+        success_prompt: AttackPrompt | None = None
+        success_response: ModelResponse | None = None
+        success_assessment: AttackAssessment | None = None
         successful_payload_id: str | None = None
         attempt_index = 0
+        attack_secret = _attack_secret(attack)
 
         while attempt_index < max_attempts:
             if pending:
                 prompt = pending.pop(0)
             elif agentic:
-                nxt = await self._next_agentic_prompt(
-                    attack,
-                    item.sample,
-                    attempt_history,
-                    max_attempts=max_attempts,
-                )
+                try:
+                    nxt = await self._next_agentic_prompt(
+                        attack,
+                        item.sample,
+                        attempt_history,
+                        max_attempts=max_attempts,
+                    )
+                except BudgetExceededError as exc:
+                    # Attacker-side budget exhaustion must classify the item,
+                    # not abort the whole run.
+                    fp, fr, fa = self._select_final_attempt(
+                        last_prompt,
+                        last_response,
+                        last_assessment,
+                        success_prompt,
+                        success_response,
+                        success_assessment,
+                        successful_payload_id,
+                    )
+                    result = EvaluationItem(
+                        item_id=item.item_id,
+                        model=item.model,
+                        attack_id=item.attack_id,
+                        sample_id=item.sample.id,
+                        status=ItemStatus.BUDGET_EXCEEDED,
+                        prompt=fp,
+                        response=fr,
+                        assessment=fa,
+                        error=str(exc),
+                        started_at=started,
+                        completed_at=datetime.now(timezone.utc),
+                    )
+                    await self._emit_item_finished(plan, result)
+                    return result
                 if nxt is None:
                     break
                 prompt = nxt
@@ -461,15 +535,24 @@ class EvaluationEngine:
             try:
                 response = await self._generate_response(plan, item, prompt)
             except BudgetExceededError as exc:
+                fp, fr, fa = self._select_final_attempt(
+                    last_prompt,
+                    last_response,
+                    last_assessment,
+                    success_prompt,
+                    success_response,
+                    success_assessment,
+                    successful_payload_id,
+                )
                 result = EvaluationItem(
                     item_id=item.item_id,
                     model=item.model,
                     attack_id=item.attack_id,
                     sample_id=item.sample.id,
                     status=ItemStatus.BUDGET_EXCEEDED,
-                    prompt=prompt,
-                    response=last_response,
-                    assessment=last_assessment,
+                    prompt=fp or prompt,
+                    response=fr,
+                    assessment=fa,
                     error=str(exc),
                     started_at=started,
                     completed_at=datetime.now(timezone.utc),
@@ -545,14 +628,19 @@ class EvaluationEngine:
                     "attempt": attempt_index,
                     "payload_id": payload_id,
                     "technique_id": str(prompt.metadata.get("technique_id") or payload_id),
+                    "prompt_text": _scrub_secret(prompt.text, attack_secret),
                     "success": assessment.success,
                     "score": assessment.score,
-                    "evidence": list(assessment.evidence),
+                    "evidence": [
+                        _scrub_secret(str(entry), attack_secret) for entry in assessment.evidence
+                    ],
                     "defense_class": defense_class,
                     "invented": invented,
                     # Response context for multi-turn / LLM-driven attackers
                     # (Crescendo-style attacks reference the model's own words).
-                    "response_preview": (response.text or "")[:400],
+                    # The canary is scrubbed: refusal quotes must not launder
+                    # the secret into the next attacker prompt.
+                    "response_preview": _scrub_secret((response.text or "")[:400], attack_secret),
                     "refusal_analysis_with_canary_quote": float(
                         assessment.metrics.get("refusal_analysis_with_canary_quote", 0.0)
                     ),
@@ -599,8 +687,24 @@ class EvaluationEngine:
             )
             if assessment.success:
                 successful_payload_id = payload_id
+                if success_prompt is None:
+                    success_prompt = prompt
+                    success_response = response
+                    success_assessment = assessment
                 if stop_on_success:
                     break
+
+        # With stop_on_success disabled, later failed attempts must not
+        # discard a real disclosure: prefer the successful attempt triple.
+        last_prompt, last_response, last_assessment = self._select_final_attempt(
+            last_prompt,
+            last_response,
+            last_assessment,
+            success_prompt,
+            success_response,
+            success_assessment,
+            successful_payload_id,
+        )
 
         if last_prompt is None or last_response is None or last_assessment is None:
             result = EvaluationItem(

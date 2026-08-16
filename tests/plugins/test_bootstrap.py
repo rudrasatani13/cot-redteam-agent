@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 from cot_redteam.attacks.base import AttackRegistry
-from cot_redteam.core.errors import PluginError
 from cot_redteam.monitors.base import MonitorRegistry
 from cot_redteam.plugins.bootstrap import bootstrap_plugins, reset_plugins_for_tests
 from cot_redteam.plugins.registry import PluginMetadata
@@ -58,7 +57,9 @@ def test_entry_point_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "injection.cot_injection" in AttackRegistry
 
 
-def test_entry_point_failure_includes_distribution(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_entry_point_failure_skips_and_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A broken third-party distribution must not abort bootstrap (H16)."""
+
     class BadEP:
         name = "bad"
         dist = SimpleNamespace(name="bad-dist")
@@ -66,12 +67,23 @@ def test_entry_point_failure_includes_distribution(monkeypatch: pytest.MonkeyPat
         def load(self) -> None:
             raise RuntimeError("boom")
 
+    loaded: list[str] = []
+
+    class GoodEP:
+        name = "good"
+        dist = SimpleNamespace(name="good-dist")
+
+        def load(self) -> None:
+            loaded.append(self.name)
+
     class FakeEPS:
         def select(self, group: str):
             if group == "cot_redteam.attacks":
-                return [BadEP()]
+                return [BadEP(), GoodEP()]
             return []
 
     monkeypatch.setattr("importlib.metadata.entry_points", lambda: FakeEPS())
-    with pytest.raises(PluginError, match="bad-dist"):
-        bootstrap_plugins(force=True)
+    bootstrap_plugins(force=True)
+    # The good entry point after the broken one still loads.
+    assert loaded == ["good"]
+    assert "injection.cot_injection" in AttackRegistry

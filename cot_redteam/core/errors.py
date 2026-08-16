@@ -39,5 +39,10 @@ class DatasetError(CotRedTeamError):
     """Malformed or incomplete dataset input."""
 
 
-class StorageError(CotRedTeamError):
-    """Persistence or artifact store failure."""
+class StorageError(CotRedTeamError, ValueError):
+    """Persistence or artifact store failure.
+
+    Also subclasses ``ValueError`` for backward compatibility with callers
+    and tests that historically caught bare ``ValueError`` from storage
+    boundaries.
+    """

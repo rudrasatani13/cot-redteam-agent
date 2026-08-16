@@ -256,6 +256,47 @@ async def test_oracle_exception_maps_to_error_via_runner() -> None:
 
 
 @pytest.mark.asyncio
+async def test_enforce_authorization_blocks_execution_at_engine_level() -> None:
+    """Opt-in enforcement: the exfiltrating call is denied dispatch, the
+    world stays clean, and the run is never a verified exploit."""
+    scenario_id = "support.indirect_prompt_injection.v1"
+    scenario = support_scenario(scenario_id)
+    fixture = support_fixture(scenario_id, "vulnerable")
+    world = SupportAgentWorld(initial_state=fixture.initial_state)
+    target = ScriptedTarget(script=fixture.script)
+    settings = AgentSecuritySettings()
+    engine = AgentExecutionEngine(
+        scenario=scenario,
+        fixture=fixture,
+        world=world,
+        target=target,
+        invocation_service=InvocationService(
+            AppConfig.model_validate(
+                {"providers": {"mock": {"kind": "mock"}}, "evaluation": {"models": ["mock:m"]}}
+            )
+        ),
+        budget=BudgetTracker(settings.budgets),
+        settings=settings,
+        enforce_authorization=True,
+    )
+    try:
+        run = await engine.run(run_id="enforce-1", session_id="enforce-1", seed=7)
+    finally:
+        await target.aclose()
+    assert world.outbound_sink == {}
+    from cot_redteam.agent.types import ActionEvent as _ActionEvent
+
+    actions = [event for event in run.trajectory.events if isinstance(event, _ActionEvent)]
+    sends = [event for event in actions if event.action_kind == "webhook.send"]
+    assert sends  # the denial itself is evidenced
+    assert all(not event.executed for event in sends)
+    assert all(event.status.value == "denied" for event in sends)
+    # The script aborted on the typed denial: honest ERROR, never a clean
+    # invariant-held claim and never a verified exploit.
+    assert run.outcome is AgentOutcome.ERROR
+
+
+@pytest.mark.asyncio
 async def test_failing_oracle_diagnostics_are_redacted_before_db_persistence(tmp_path) -> None:
     from cot_redteam.storage.sqlite import SQLiteRunStore
 

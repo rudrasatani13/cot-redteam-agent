@@ -120,7 +120,9 @@ def test_status_dump_contains_state() -> None:
 )
 def test_apply_session_to_config_effort_mapping(effort: str, expected_attack: str) -> None:
     app = _make_app()
+    # Mirrors the /effort handler: choosing a preset un-pins an explicit attack.
     app.state.effort = effort
+    app.state.attack_explicit = False
     cfg = app._apply_session_to_config()
     assert cfg.evaluation.attacks == [expected_attack]
     assert cfg.evaluation.models == ["mock:a", "mock:b"]
@@ -130,6 +132,16 @@ def test_apply_session_to_config_effort_mapping(effort: str, expected_attack: st
     assert attack_cfg["bank_path"] == "pkg:system_canary_bank.jsonl"
     # budget headroom: models * payloads * samples + 2
     assert cfg.evaluation.budgets.max_requests >= 2 * 6 * 1 + 2
+
+
+def test_apply_session_to_config_explicit_attack_survives_effort() -> None:
+    app = _make_app()
+    app.state.attack_id = "injection.crescendo_canary"
+    app.state.attack_explicit = True
+    app.state.effort = "fixed"
+    cfg = app._apply_session_to_config()
+    # An explicit /attack selection must not be overwritten by effort presets.
+    assert cfg.evaluation.attacks == ["injection.crescendo_canary"]
 
 
 def test_apply_session_to_config_models_override() -> None:

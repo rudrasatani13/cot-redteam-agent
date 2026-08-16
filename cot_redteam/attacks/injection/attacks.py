@@ -291,10 +291,11 @@ class AdaptiveSystemCanaryInjectionAttack(SystemCanaryInjectionAttack):
         return self.create_prompts(sample)[0]
 
     def create_prompts(self, sample: DatasetSample) -> Sequence[AttackPrompt]:
+        # No canary prefix in metadata: it flows into SQLite/reports and
+        # leaks secret material under every retention setting.
         return build_prompts_from_bank(
             self.metadata.id,
             sample,
             self.payloads,
             system_prompt=self._system_prompt(),
-            extra_metadata={"canary_prefix": self.canary[:16]},
         )

@@ -14,6 +14,7 @@ from typing import Any, cast
 
 from cot_redteam.core.config import AppConfig
 from cot_redteam.core.types import (
+    AttackAssessment,
     AttackPrompt,
     EvaluationItem,
     EvaluationRun,
@@ -93,6 +94,53 @@ def _sanitize_monitor(
     )
 
 
+def _sanitize_history_entry(
+    entry: Any,
+    *,
+    retain_prompts: bool,
+    retain_responses: bool,
+) -> Any:
+    """Redact response-derived fields inside an attempt-history entry."""
+    if not isinstance(entry, Mapping):
+        return entry
+    sanitized = dict(entry)
+    if not retain_responses:
+        if "response_preview" in sanitized:
+            sanitized["response_preview"] = _REDACTED
+        if isinstance(sanitized.get("evidence"), list):
+            sanitized["evidence"] = [_REDACTED]
+    if not retain_prompts and "prompt_text" in sanitized:
+        sanitized["prompt_text"] = _REDACTED
+    return sanitized
+
+
+def _sanitize_prompt_metadata(
+    prompt: AttackPrompt,
+    *,
+    retain_prompts: bool,
+    retain_responses: bool,
+) -> AttackPrompt:
+    """Apply retention flags to prompt metadata (attempt history previews)."""
+    metadata = dict(prompt.metadata) if prompt.metadata else {}
+    history = metadata.get("attempt_history")
+    if isinstance(history, list):
+        metadata["attempt_history"] = [
+            _sanitize_history_entry(
+                entry,
+                retain_prompts=retain_prompts,
+                retain_responses=retain_responses,
+            )
+            for entry in history
+        ]
+    return AttackPrompt(
+        attack_id=prompt.attack_id,
+        text=prompt.text,
+        sample_id=prompt.sample_id,
+        system_prompt=prompt.system_prompt,
+        metadata=metadata,
+    )
+
+
 def sanitize_run(
     run: EvaluationRun,
     config: AppConfig,
@@ -118,6 +166,14 @@ def sanitize_run(
                 sample_id=prompt.sample_id,
                 system_prompt=None,
                 metadata={},
+            )
+        elif prompt is not None:
+            # Retained prompts still carry response previews inside
+            # attempt-history metadata; apply the response retention flag.
+            prompt = _sanitize_prompt_metadata(
+                prompt,
+                retain_prompts=retain_prompts,
+                retain_responses=retain_responses,
             )
         if response is not None:
             text = response.text if retain_responses else "[redacted]"
@@ -149,6 +205,26 @@ def sanitize_run(
             )
             for outcome in item.monitors
         )
+        assessment = item.assessment
+        if assessment is not None:
+            # Evidence strings are carved from model output; they must obey
+            # the response retention flag. Success/score/metrics stay.
+            evidence = assessment.evidence if retain_responses else (_REDACTED,)
+            explanation = cast(
+                str, redact_sensitive_values(assessment.explanation, secrets=secrets)
+            )
+            assessment = AttackAssessment(
+                success=assessment.success,
+                score=assessment.score,
+                evidence=evidence,
+                metrics=assessment.metrics,
+                explanation=explanation,
+            )
+        # Error strings routinely embed provider response bodies, header
+        # echoes, or URLs with credential query params: always redact.
+        error = item.error
+        if error is not None:
+            error = cast(str, redact_sensitive_values(error, secrets=secrets))
         items.append(
             EvaluationItem(
                 item_id=item.item_id,
@@ -158,9 +234,9 @@ def sanitize_run(
                 status=item.status,
                 prompt=prompt,
                 response=response,
-                assessment=item.assessment,
+                assessment=assessment,
                 monitors=monitors,
-                error=item.error,
+                error=error,
                 started_at=item.started_at,
                 completed_at=item.completed_at,
             )

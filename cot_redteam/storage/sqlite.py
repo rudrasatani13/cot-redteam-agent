@@ -38,6 +38,7 @@ from cot_redteam.benchmark.scoring import (
     ScorerVerdict,
     TranscriptScoring,
 )
+from cot_redteam.core.errors import StorageError
 from cot_redteam.core.serialization import canonical_json
 from cot_redteam.core.types import (
     AttackAssessment,
@@ -237,6 +238,15 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        4,
+        """
+        CREATE INDEX IF NOT EXISTS idx_evaluation_items_run_id
+            ON evaluation_items(run_id);
+        CREATE INDEX IF NOT EXISTS idx_monitor_outcomes_item_id
+            ON monitor_outcomes(item_id);
+        """,
+    ),
 ]
 
 
@@ -256,11 +266,24 @@ def _parse_dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value)
 
 
+def _int_field(data: Mapping[str, Any], key: str) -> int:
+    """Read an integer JSON field, treating only ``None`` as missing."""
+    value = data.get(key)
+    return int(value) if value is not None else 0
+
+
+def _wrap_sqlite_failure(exc: sqlite3.IntegrityError | sqlite3.OperationalError) -> StorageError:
+    """Map a raw sqlite3 failure into the public StorageError taxonomy."""
+    if isinstance(exc, sqlite3.IntegrityError):
+        return StorageError(f"integrity constraint violated: {exc}")
+    return StorageError(f"sqlite operational failure: {exc}")
+
+
 class SQLiteRunStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(str(self.path))
+        self.connection = sqlite3.connect(str(self.path), timeout=30.0)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.execute("PRAGMA journal_mode = WAL")
@@ -274,23 +297,40 @@ class SQLiteRunStore:
         self.close()
 
     def _migrate(self) -> None:
-        self.connection.execute(
+        conn = self.connection
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS schema_migrations ("
             "version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
         )
-        self.connection.commit()
-        applied = {
-            row[0] for row in self.connection.execute("SELECT version FROM schema_migrations")
-        }
+        conn.commit()
+        applied = {row[0] for row in conn.execute("SELECT version FROM schema_migrations")}
         for version, sql in MIGRATIONS:
             if version in applied:
                 continue
-            self.connection.executescript(sql)
-            self.connection.execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-                (version, datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")),
-            )
-            self.connection.commit()
+            # The DDL statements and the schema_migrations insert share one
+            # explicit transaction so a crash can never leave applied DDL
+            # without its version row (which would break reopening).
+            # ``executescript`` implicitly commits first and is therefore
+            # unusable here; statements run individually instead.
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for statement in (part.strip() for part in sql.split(";")):
+                    if statement:
+                        conn.execute(statement)
+                conn.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (version, datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")),
+                )
+                conn.commit()
+            except sqlite3.IntegrityError as exc:
+                conn.rollback()
+                raise StorageError(f"migration {version} failed integrity check: {exc}") from exc
+            except sqlite3.OperationalError as exc:
+                conn.rollback()
+                raise StorageError(f"migration {version} failed: {exc}") from exc
+            except Exception:
+                conn.rollback()
+                raise
 
     def save(self, run: EvaluationRun, manifest: dict[str, Any] | None = None) -> None:
         conn = self.connection
@@ -364,6 +404,9 @@ class SQLiteRunStore:
                         ),
                     )
             conn.commit()
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
+            conn.rollback()
+            raise _wrap_sqlite_failure(exc) from exc
         except Exception:
             conn.rollback()
             raise
@@ -477,6 +520,9 @@ class SQLiteRunStore:
                         ),
                     )
             conn.commit()
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
+            conn.rollback()
+            raise _wrap_sqlite_failure(exc) from exc
         except Exception:
             conn.rollback()
             raise
@@ -595,7 +641,7 @@ class SQLiteRunStore:
         started = _parse_dt(row["started_at"])
         completed = _parse_dt(row["completed_at"])
         if started is None or completed is None:
-            raise ValueError(f"benchmark run {run_id!r} has invalid timestamps")
+            raise StorageError(f"benchmark run {run_id!r} has invalid timestamps")
         return BenchmarkRunResult(
             run_id=run_id,
             started_at=started,
@@ -674,8 +720,12 @@ class SQLiteRunStore:
             cancelled=summary_data["cancelled"],
             monitor_excluded=summary_data["monitor_excluded"],
         )
-        started = _parse_dt(row["started_at"]) or datetime.now(timezone.utc)
-        completed = _parse_dt(row["completed_at"]) or datetime.now(timezone.utc)
+        started = _parse_dt(row["started_at"])
+        completed = _parse_dt(row["completed_at"])
+        if started is None or completed is None:
+            # Corrupt or missing timestamps must not be silently replaced
+            # with "now"; fail loudly like get_benchmark does.
+            raise StorageError(f"run {run_id!r} has invalid timestamps")
         return EvaluationRun(
             run_id=row["run_id"],
             status=RunStatus(row["status"]),
@@ -822,9 +872,11 @@ class SQLiteRunStore:
             reasoning_source=ReasoningSource(data.get("reasoning_source", "absent")),
             latency_ms=float(data.get("latency_ms") or 0.0),
             usage=TokenUsage(
-                input_tokens=int(usage.get("input_tokens") or 0),
-                output_tokens=int(usage.get("output_tokens") or 0),
+                input_tokens=_int_field(usage, "input_tokens"),
+                output_tokens=_int_field(usage, "output_tokens"),
                 total_tokens=usage.get("total_tokens"),
+                cache_read_input_tokens=_int_field(usage, "cache_read_input_tokens"),
+                cache_creation_input_tokens=_int_field(usage, "cache_creation_input_tokens"),
             ),
             provider_request_id=data.get("provider_request_id"),
             finish_reason=data.get("finish_reason"),
@@ -862,9 +914,9 @@ class SQLiteRunStore:
         sanitizer = AgentSanitizer(retention)
         run = sanitizer.sanitize_run(run)
         if run.status is not AgentRunStatus.RUNNING:
-            raise ValueError("begin_agent_run requires a RUNNING run")
+            raise StorageError("begin_agent_run requires a RUNNING run")
         if run.metadata.get("manifest") is not None:
-            raise ValueError("agent manifests may only be attached after finalization")
+            raise StorageError("agent manifests may only be attached after finalization")
         conn = self.connection
         try:
             conn.execute("BEGIN")
@@ -873,7 +925,7 @@ class SQLiteRunStore:
                 (run.run_id,),
             ).fetchone()
             if existing is not None:
-                raise ValueError(f"agent run {run.run_id!r} already exists")
+                raise StorageError(f"agent run {run.run_id!r} already exists")
             conn.execute(
                 """
                 INSERT INTO agent_runs(
@@ -911,6 +963,9 @@ class SQLiteRunStore:
                 ),
             )
             conn.commit()
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
+            conn.rollback()
+            raise _wrap_sqlite_failure(exc) from exc
         except Exception:
             conn.rollback()
             raise
@@ -956,6 +1011,9 @@ class SQLiteRunStore:
                     ),
                 )
             conn.commit()
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
+            conn.rollback()
+            raise _wrap_sqlite_failure(exc) from exc
         except Exception:
             conn.rollback()
             raise
@@ -989,6 +1047,10 @@ class SQLiteRunStore:
                 )
             if owns_transaction:
                 conn.commit()
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
+            if owns_transaction:
+                conn.rollback()
+            raise _wrap_sqlite_failure(exc) from exc
         except Exception:
             if owns_transaction:
                 conn.rollback()
@@ -1020,6 +1082,10 @@ class SQLiteRunStore:
                 )
             if owns_transaction:
                 conn.commit()
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
+            if owns_transaction:
+                conn.rollback()
+            raise _wrap_sqlite_failure(exc) from exc
         except Exception:
             if owns_transaction:
                 conn.rollback()
@@ -1042,7 +1108,7 @@ class SQLiteRunStore:
         sanitizer = AgentSanitizer(retention)
         run = sanitizer.sanitize_run(run)
         if run.status in (AgentRunStatus.RUNNING, AgentRunStatus.INTERRUPTED):
-            raise ValueError(f"cannot finalize agent run with status {run.status.value!r}")
+            raise StorageError(f"cannot finalize agent run with status {run.status.value!r}")
         conn = self.connection
         try:
             conn.execute("BEGIN")
@@ -1060,9 +1126,9 @@ class SQLiteRunStore:
                 (run.run_id,),
             ).fetchone()
             if row is None:
-                raise ValueError(f"agent run {run.run_id!r} does not exist")
+                raise StorageError(f"agent run {run.run_id!r} does not exist")
             if row["status"] != AgentRunStatus.RUNNING.value:
-                raise ValueError(
+                raise StorageError(
                     f"agent run {run.run_id!r} is already {row['status']!r}; "
                     "only RUNNING rows may be finalized"
                 )
@@ -1106,7 +1172,7 @@ class SQLiteRunStore:
                 },
             }
             if supplied_refs != stored_refs:
-                raise ValueError("final agent run identity does not match the stored run")
+                raise StorageError("final agent run identity does not match the stored run")
             for field, supplied in (
                 ("outcome", run.outcome.value if run.outcome else None),
                 ("pre_snapshot_digest", run.pre_snapshot_digest),
@@ -1115,7 +1181,7 @@ class SQLiteRunStore:
             ):
                 stored = row[field]
                 if stored is not None and stored != supplied:
-                    raise ValueError(f"final agent run {field} does not match the stored run")
+                    raise StorageError(f"final agent run {field} does not match the stored run")
 
             existing_manifest = row["manifest_json"]
             expected_manifest = {
@@ -1133,7 +1199,7 @@ class SQLiteRunStore:
                     expected=expected_manifest,
                 )
                 if existing_manifest is not None:
-                    raise ValueError("agent manifest is already attached")
+                    raise StorageError("agent manifest is already attached")
                 manifest_json: str | None = canonical_json(validated_manifest)
             else:
                 if existing_manifest is None:
@@ -1142,7 +1208,7 @@ class SQLiteRunStore:
                     try:
                         existing_data = json.loads(existing_manifest)
                     except (TypeError, ValueError) as exc:
-                        raise ValueError("stored agent manifest is invalid JSON") from exc
+                        raise StorageError("stored agent manifest is invalid JSON") from exc
                     validated_existing = validate_agent_manifest(
                         existing_data,
                         expected=expected_manifest,
@@ -1175,13 +1241,16 @@ class SQLiteRunStore:
                 ),
             )
             if cursor.rowcount != 1:
-                raise ValueError(f"agent run {run.run_id!r} changed state before finalization")
+                raise StorageError(f"agent run {run.run_id!r} changed state before finalization")
             # These methods detect the outer transaction and deliberately do
             # not commit independently.  Any failure rolls back status,
             # oracle rows, and finding rows together below.
             self.save_agent_oracle_results(run.run_id, run.oracle_results)
             self.save_agent_findings(run.run_id, run.findings)
             conn.commit()
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
+            conn.rollback()
+            raise _wrap_sqlite_failure(exc) from exc
         except Exception:
             conn.rollback()
             raise
@@ -1211,11 +1280,11 @@ class SQLiteRunStore:
                 (run_id,),
             ).fetchone()
             if row is None:
-                raise ValueError(f"agent run {run_id!r} does not exist")
+                raise StorageError(f"agent run {run_id!r} does not exist")
             if row["status"] == AgentRunStatus.RUNNING.value:
-                raise ValueError("cannot attach a manifest to a RUNNING agent run")
+                raise StorageError("cannot attach a manifest to a RUNNING agent run")
             if row["manifest_json"] is not None:
-                raise ValueError("agent manifest is already attached")
+                raise StorageError("agent manifest is already attached")
             validated_manifest = validate_agent_manifest(
                 manifest,
                 expected={
@@ -1250,8 +1319,11 @@ class SQLiteRunStore:
                 (canonical_json(validated_manifest), run_id),
             )
             if cursor.rowcount != 1:
-                raise ValueError(f"agent run {run_id!r} does not exist")
+                raise StorageError(f"agent run {run_id!r} does not exist")
             conn.commit()
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
+            conn.rollback()
+            raise _wrap_sqlite_failure(exc) from exc
         except Exception:
             conn.rollback()
             raise
@@ -1427,7 +1499,7 @@ class SQLiteRunStore:
                     )
                 )
                 if stored != candidate:
-                    raise ValueError(f"replay record {replay_id!r} is immutable")
+                    raise StorageError(f"replay record {replay_id!r} is immutable")
                 conn.commit()
                 return
             conn.execute(
@@ -1452,6 +1524,9 @@ class SQLiteRunStore:
                 ),
             )
             conn.commit()
+        except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
+            conn.rollback()
+            raise _wrap_sqlite_failure(exc) from exc
         except Exception:
             conn.rollback()
             raise

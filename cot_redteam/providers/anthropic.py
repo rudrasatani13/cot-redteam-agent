@@ -24,8 +24,19 @@ from cot_redteam.providers.base import (
     SleepFn,
     classify_http_status,
     default_sleep,
+    parse_retry_after,
     validate_message_capabilities,
 )
+
+
+def _usage_int(usage: Mapping[str, Any], key: str) -> int:
+    """Read an integer usage field, treating only ``None`` as missing.
+
+    An explicit ``or 0`` chain would also skip a legitimate ``0``; use an
+    explicit ``None`` check instead.
+    """
+    value = usage.get(key)
+    return int(value) if value is not None else 0
 
 
 class AnthropicProvider:
@@ -40,6 +51,7 @@ class AnthropicProvider:
         self.settings = settings
         self.capabilities = TargetCapabilities(**settings.capabilities.model_dump())
         self.request_count = 0
+        self.last_wire_attempts = 0
         self._sleep = sleep or default_sleep
         self._retry = RetryPolicy(max_retries=settings.max_retries)
         headers = {
@@ -100,7 +112,10 @@ class AnthropicProvider:
         payload: dict[str, Any] = {
             "model": model.model_id,
             "max_tokens": request.max_tokens,
-            "temperature": request.temperature,
+            # Anthropic rejects temperature > 1.0 while the shared
+            # GenerationRequest contract allows 0-2 for other providers;
+            # clamp for this transport only.
+            "temperature": min(max(request.temperature, 0.0), 1.0),
             "messages": messages,
         }
         if system_parts:
@@ -109,43 +124,52 @@ class AnthropicProvider:
             payload["stop_sequences"] = list(request.stop)
 
         attempt = 0
-        while True:
-            self.request_count += 1
-            started = time.perf_counter()
-            try:
-                response = await self._client.post("/v1/messages", json=payload)
-            except httpx.TimeoutException as exc:
-                if attempt >= self._retry.max_retries:
-                    raise TransientProviderError(f"timeout after retries: {exc}") from exc
-                await self._sleep(self._retry.delay_for_attempt(attempt))
-                attempt += 1
-                continue
-            except httpx.TransportError as exc:
-                if attempt >= self._retry.max_retries:
-                    raise TransientProviderError(f"connection error: {exc}") from exc
-                await self._sleep(self._retry.delay_for_attempt(attempt))
-                attempt += 1
-                continue
-
-            if response.status_code >= 400:
-                err_cls = classify_http_status(response.status_code)
-                if err_cls is TransientProviderError and attempt < self._retry.max_retries:
+        wire_attempts = 0
+        try:
+            while True:
+                self.request_count += 1
+                wire_attempts += 1
+                started = time.perf_counter()
+                try:
+                    response = await self._client.post("/v1/messages", json=payload)
+                except httpx.TimeoutException as exc:
+                    if attempt >= self._retry.max_retries:
+                        raise TransientProviderError(f"timeout after retries: {exc}") from exc
                     await self._sleep(self._retry.delay_for_attempt(attempt))
                     attempt += 1
                     continue
-                raise err_cls(f"anthropic HTTP {response.status_code} for {model}")
+                except httpx.TransportError as exc:
+                    if attempt >= self._retry.max_retries:
+                        raise TransientProviderError(f"connection error: {exc}") from exc
+                    await self._sleep(self._retry.delay_for_attempt(attempt))
+                    attempt += 1
+                    continue
 
-            try:
-                data = response.json()
-            except ValueError as exc:
-                raise PermanentProviderError("invalid JSON response body") from exc
+                if response.status_code >= 300:
+                    err_cls = classify_http_status(response.status_code)
+                    if err_cls is TransientProviderError and attempt < self._retry.max_retries:
+                        retry_after = parse_retry_after(response.headers.get("Retry-After"))
+                        if retry_after is not None:
+                            await self._sleep(retry_after)
+                        else:
+                            await self._sleep(self._retry.delay_for_attempt(attempt))
+                        attempt += 1
+                        continue
+                    raise err_cls(f"anthropic HTTP {response.status_code} for {model}")
 
-            try:
-                return self._parse_success(model, data, response, started)
-            except PermanentProviderError:
-                raise
-            except Exception as exc:
-                raise PermanentProviderError(f"schema-invalid success payload: {exc}") from exc
+                try:
+                    data = response.json()
+                except ValueError as exc:
+                    raise PermanentProviderError("invalid JSON response body") from exc
+
+                try:
+                    return self._parse_success(model, data, response, started, wire_attempts)
+                except PermanentProviderError:
+                    raise
+                except Exception as exc:
+                    raise PermanentProviderError(f"schema-invalid success payload: {exc}") from exc
+        finally:
+            self.last_wire_attempts = wire_attempts
 
     def _parse_success(
         self,
@@ -153,6 +177,7 @@ class AnthropicProvider:
         data: Mapping[str, Any],
         response: httpx.Response,
         started: float,
+        wire_attempts: int,
     ) -> ModelResponse:
         content = data.get("content")
         if not isinstance(content, list) or not content:
@@ -167,15 +192,19 @@ class AnthropicProvider:
                 text_parts.append(str(block.get("text", "")))
             elif btype in ("thinking", "reasoning"):
                 reasoning_parts.append(str(block.get("thinking") or block.get("text") or ""))
-        text = "".join(text_parts)
+        text = "\n\n".join(text_parts)
         if not text and not reasoning_parts:
             raise PermanentProviderError("empty anthropic content")
         reasoning = "\n".join(p for p in reasoning_parts if p) or None
         reasoning_source = ReasoningSource.PROVIDER if reasoning else ReasoningSource.ABSENT
-        usage_raw = data.get("usage") or {}
+        usage_raw = data.get("usage")
+        if not isinstance(usage_raw, Mapping):
+            usage_raw = {}
         usage = TokenUsage(
-            input_tokens=int(usage_raw.get("input_tokens") or 0),
-            output_tokens=int(usage_raw.get("output_tokens") or 0),
+            input_tokens=_usage_int(usage_raw, "input_tokens"),
+            output_tokens=_usage_int(usage_raw, "output_tokens"),
+            cache_read_input_tokens=_usage_int(usage_raw, "cache_read_input_tokens"),
+            cache_creation_input_tokens=_usage_int(usage_raw, "cache_creation_input_tokens"),
         )
         request_id = response.headers.get("request-id") or data.get("id")
         return ModelResponse(
@@ -188,7 +217,7 @@ class AnthropicProvider:
             provider_request_id=str(request_id) if request_id else None,
             finish_reason=str(data.get("stop_reason")) if data.get("stop_reason") else None,
             model_revision=str(data.get("model")) if data.get("model") else None,
-            metadata={"provider_kind": "anthropic"},
+            metadata={"provider_kind": "anthropic", "wire_attempts": wire_attempts},
         )
 
     async def aclose(self) -> None:

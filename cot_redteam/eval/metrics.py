@@ -40,7 +40,14 @@ class ComparisonResult:
     odds_ratio: float | None
     ci_low: float | None
     ci_high: float | None
+    # Deprecated: unpaired Fisher exact was replaced by the exact McNemar
+    # test below; kept (always None) so existing consumers keep their shape.
     fisher_p_value: float | None
+    mcnemar_p_value: float | None = None
+    discordant_a_only: int = 0
+    discordant_b_only: int = 0
+    concordant_both_success: int = 0
+    concordant_both_failure: int = 0
 
 
 def _rate(successes: int, eligible: int) -> float | None:
@@ -129,30 +136,36 @@ def summarize_run(run: EvaluationRun, *, seed: int = 0) -> MetricSummary:
     )
 
 
+def _index_by_sample(items: Sequence[EvaluationItem]) -> dict[str, EvaluationItem]:
+    """Index succeeded, assessed items by sample_id.
+
+    Duplicate-resolution rule: items are stably sorted by sample_id (stable
+    sort preserves the input order of equal keys), and the FIRST occurrence
+    in that order — i.e. the first eligible item encountered in the input —
+    wins. Later duplicates are discarded.
+    """
+    indexed: dict[str, EvaluationItem] = {}
+    for item in sorted(items, key=lambda i: i.sample_id):
+        if item.status is ItemStatus.SUCCEEDED and item.assessment is not None:
+            indexed.setdefault(item.sample_id, item)
+    return indexed
+
+
 def paired_comparison(
     group_a: Sequence[EvaluationItem],
     group_b: Sequence[EvaluationItem],
 ) -> ComparisonResult:
-    a_by_sample = {
-        i.sample_id: i
-        for i in group_a
-        if i.status is ItemStatus.SUCCEEDED and i.assessment is not None
-    }
-    b_by_sample = {
-        i.sample_id: i
-        for i in group_b
-        if i.status is ItemStatus.SUCCEEDED and i.assessment is not None
-    }
+    """McNemar paired analysis of attack success on shared samples.
+
+    The two groups are evaluated on the same samples, so successes are
+    paired per sample_id. The paired contingency table is built from
+    sample-keyed pairs; the difference in success rates is reported with a
+    discordant-pair standard error, and the exact McNemar test (binomial on
+    the discordant pairs) replaces the old unpaired Wald SE + Fisher exact.
+    """
+    a_by_sample = _index_by_sample(group_a)
+    b_by_sample = _index_by_sample(group_b)
     shared = sorted(set(a_by_sample) & set(b_by_sample))
-    a_succ = 0
-    b_succ = 0
-    for sid in shared:
-        a_assessment = a_by_sample[sid].assessment
-        b_assessment = b_by_sample[sid].assessment
-        if a_assessment is not None and a_assessment.success:
-            a_succ += 1
-        if b_assessment is not None and b_assessment.success:
-            b_succ += 1
     n = len(shared)
     if n == 0:
         return ComparisonResult(
@@ -166,29 +179,51 @@ def paired_comparison(
             ci_high=None,
             fisher_p_value=None,
         )
-    ra = a_succ / n
-    rb = b_succ / n
-    risk_diff = ra - rb
-    # Odds ratio with Haldane-Anscombe correction when needed
-    a_fail = n - a_succ
-    b_fail = n - b_succ
-    if 0 in (a_succ, b_succ, a_fail, b_fail):
-        odds = ((a_succ + 0.5) * (b_fail + 0.5)) / ((a_fail + 0.5) * (b_succ + 0.5))
+    both_success = 0
+    both_failure = 0
+    a_only = 0  # a succeeded where b failed (discordant)
+    b_only = 0  # b succeeded where a failed (discordant)
+    for sid in shared:
+        a_assessment = a_by_sample[sid].assessment
+        b_assessment = b_by_sample[sid].assessment
+        a_success = a_assessment is not None and a_assessment.success
+        b_success = b_assessment is not None and b_assessment.success
+        if a_success and b_success:
+            both_success += 1
+        elif not a_success and not b_success:
+            both_failure += 1
+        elif a_success:
+            a_only += 1
+        else:
+            b_only += 1
+    a_succ = both_success + a_only
+    b_succ = both_success + b_only
+    risk_diff = (a_succ - b_succ) / n
+
+    # Paired (conditional) odds ratio on the discordant pairs, with a
+    # Haldane-Anscombe style correction when one side has no discordance.
+    if a_only == 0 or b_only == 0:
+        odds = (a_only + 0.5) / (b_only + 0.5)
     else:
-        odds = (a_succ * b_fail) / (a_fail * b_succ)
+        odds = a_only / b_only
 
-    try:
-        from scipy.stats import fisher_exact
-
-        table = [[a_succ, a_fail], [b_succ, b_fail]]
-        _, p_value = fisher_exact(table)
-    except Exception:
-        p_value = None
-
-    # Simple Wald CI for risk difference
-    se = math.sqrt(max(ra * (1 - ra) / n, 0) + max(rb * (1 - rb) / n, 0))
+    # Discordant-pair SE for the paired difference in proportions.
+    discordant = a_only + b_only
+    se = math.sqrt(discordant) / n
     ci_low = risk_diff - 1.96 * se
     ci_high = risk_diff + 1.96 * se
+
+    # Exact McNemar test: binomial test of the discordant split against 0.5.
+    p_value: float | None
+    if discordant == 0:
+        p_value = 1.0
+    else:
+        try:
+            from scipy.stats import binomtest
+
+            p_value = float(binomtest(a_only, discordant, 0.5).pvalue)
+        except Exception:
+            p_value = None
 
     return ComparisonResult(
         group_a_size=n,
@@ -199,5 +234,10 @@ def paired_comparison(
         odds_ratio=odds,
         ci_low=ci_low,
         ci_high=ci_high,
-        fisher_p_value=float(p_value) if p_value is not None else None,
+        fisher_p_value=None,
+        mcnemar_p_value=p_value,
+        discordant_a_only=a_only,
+        discordant_b_only=b_only,
+        concordant_both_success=both_success,
+        concordant_both_failure=both_failure,
     )

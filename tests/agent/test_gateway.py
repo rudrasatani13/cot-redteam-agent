@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
 from cot_redteam.agent.gateway import (
     ToolArgumentError,
+    ToolAuthorizationDeniedError,
     ToolDeniedError,
     ToolGateway,
     ToolLimitExceededError,
@@ -19,6 +21,7 @@ from cot_redteam.agent.types import (
     ActionEvent,
     AuthorizationScope,
     AuthorizationState,
+    EventStatus,
     ToolCallRequested,
     ToolResultReceived,
 )
@@ -338,3 +341,137 @@ async def test_duplicate_call_id_rejected() -> None:
             tool_name="support.get_ticket",
             arguments={"ticket_id": "T-1"},
         )
+
+
+# -- opt-in authorization enforcement ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_enforce_authorization_denies_unauthorized_dispatch() -> None:
+    world = _world()
+    policy = (
+        AuthorizationScope(
+            principal="support_agent",
+            resource="outbound:sink:internal_audit",
+            action="send",
+        ),
+    )
+    gateway, recorder = _gateway(world, authorization_policy=policy, enforce_authorization=True)
+    with pytest.raises(ToolAuthorizationDeniedError, match="unauthorized"):
+        await gateway.execute(
+            call_id="call-1",
+            tool_name="webhook.send",
+            arguments={"name": "exfil", "payload": {"x": 1}},
+        )
+    # The handler never ran: no sink mutation.
+    assert world.outbound_sink == {}
+    trajectory = recorder.build_trajectory()
+    action = next(event for event in trajectory.events if isinstance(event, ActionEvent))
+    assert action.executed is False
+    assert action.attempted is True
+    assert action.authorization_state is AuthorizationState.UNAUTHORIZED
+    assert action.status is EventStatus.DENIED
+    assert action.error_code == "authorization_denied"
+    result_event = next(
+        event for event in trajectory.events if isinstance(event, ToolResultReceived)
+    )
+    assert result_event.status is EventStatus.FAILED
+    assert result_event.error_code == "authorization_denied"
+
+
+@pytest.mark.asyncio
+async def test_enforce_authorization_allows_authorized_dispatch() -> None:
+    world = _world()
+    policy = (
+        AuthorizationScope(
+            principal="support_agent",
+            resource="outbound:sink:internal_audit",
+            action="send",
+        ),
+    )
+    gateway, _ = _gateway(world, authorization_policy=policy, enforce_authorization=True)
+    result = await gateway.execute(
+        call_id="call-1",
+        tool_name="webhook.send",
+        arguments={"name": "internal_audit", "payload": {"event": "t"}},
+    )
+    assert result["accepted"] is True
+    assert world.outbound_sink["internal_audit"][0]["payload"] == {"event": "t"}
+
+
+@pytest.mark.asyncio
+async def test_observe_only_mode_still_executes_unauthorized_calls() -> None:
+    """Default (observe-only) semantics: unauthorized calls EXECUTE so the
+    deterministic oracles can prove them from observed state."""
+    world = _world()
+    policy = (
+        AuthorizationScope(
+            principal="support_agent",
+            resource="outbound:sink:internal_audit",
+            action="send",
+        ),
+    )
+    gateway, recorder = _gateway(world, authorization_policy=policy)
+    await gateway.execute(
+        call_id="call-1",
+        tool_name="webhook.send",
+        arguments={"name": "exfil", "payload": {"x": 1}},
+    )
+    assert world.outbound_sink["exfil"][0]["payload"] == {"x": 1}
+    action = next(
+        event for event in recorder.build_trajectory().events if isinstance(event, ActionEvent)
+    )
+    assert action.executed is True
+    assert action.authorization_state is AuthorizationState.UNAUTHORIZED
+
+
+# -- bounded denied requests and bounded recorded arguments ------------------
+
+
+@pytest.mark.asyncio
+async def test_denied_requests_beyond_cap_are_counted_not_recorded() -> None:
+    world = _world()
+    gateway, recorder = _gateway(
+        world,
+        allowlist=("support.get_ticket",),
+        max_denied_requests=2,
+    )
+    for index in range(5):
+        with pytest.raises(ToolDeniedError):
+            await gateway.execute(
+                call_id=f"call-{index}",
+                tool_name="crm.get_customer",  # not in the allowlist
+                arguments={"customer_id": "C-7"},
+            )
+    assert gateway.denied_requests == 5
+    actions = [
+        event for event in recorder.build_trajectory().events if isinstance(event, ActionEvent)
+    ]
+    assert len(actions) == 2  # only the first two denials recorded
+
+
+@pytest.mark.asyncio
+async def test_oversized_arguments_recorded_bounded() -> None:
+    """Oversized arguments must never be recorded in full before rejection."""
+    world = _world()
+    gateway, recorder = _gateway(world, max_serialized_argument_bytes=32)
+    blob = "x" * 4096
+    with pytest.raises(ToolArgumentError, match="size limit"):
+        await gateway.execute(
+            call_id="call-1",
+            tool_name="webhook.send",
+            arguments={"name": "audit", "payload": {"blob": blob}},
+        )
+    request = next(
+        event
+        for event in recorder.build_trajectory().events
+        if isinstance(event, ToolCallRequested)
+    )
+    assert isinstance(request.sanitized_arguments, dict)
+    assert request.sanitized_arguments.get("truncated") is True
+    assert request.sanitized_arguments.get("serialized_bytes") == len(
+        json.dumps(
+            {"name": "audit", "payload": {"blob": blob}}, ensure_ascii=False, sort_keys=True
+        ).encode("utf-8")
+    )
+    assert blob not in json.dumps(request.sanitized_arguments)

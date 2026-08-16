@@ -162,6 +162,7 @@ class AgentExecutionEngine:
         progress: ProgressCallback | None = None,
         run_store: object | None = None,
         manifest: dict[str, Any] | None = None,
+        enforce_authorization: bool = False,
     ) -> None:
         self.scenario = scenario
         self.fixture = fixture
@@ -173,6 +174,10 @@ class AgentExecutionEngine:
         self.progress = progress
         self.run_store = run_store
         self.manifest = manifest
+        # Opt-in enforcement of the derived authorization verdict.  The
+        # default stays observe-only: scenarios rely on unauthorized calls
+        # EXECUTING so the deterministic oracles can prove them.
+        self.enforce_authorization = enforce_authorization
 
     def _new_gateway(self, recorder: TrajectoryRecorder) -> ToolGateway:
         from cot_redteam.agent.scenarios.support import support_scope_resolver
@@ -185,11 +190,18 @@ class AgentExecutionEngine:
             scope_resolver=support_scope_resolver,
             # Users can tighten a scenario's ceiling but never loosen it.
             max_actions=min(self.scenario.max_actions, self.settings.max_actions),
-            max_serialized_argument_bytes=self.settings.max_serialized_argument_bytes,
+            # The scenario's payload ceiling is wired in as a hard bound on
+            # the serialized argument size: callers may tighten the byte
+            # limit but never loosen it below the scenario's contract.
+            max_serialized_argument_bytes=min(
+                self.settings.max_serialized_argument_bytes,
+                self.scenario.max_payload_bytes,
+            ),
             max_serialized_result_bytes=self.settings.max_serialized_result_bytes,
             tool_timeout_seconds=self.settings.tool_timeout_seconds,
             max_concurrent_tool_calls=self.settings.max_concurrent_tool_calls,
             authorization_policy=self.scenario.authorization_policy,
+            enforce_authorization=self.enforce_authorization,
         )
 
     def _run_required_oracles(

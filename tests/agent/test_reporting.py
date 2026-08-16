@@ -86,6 +86,23 @@ def test_jsonl_omits_raw_secret_with_default_retention(tmp_path: Path) -> None:
     assert "Forwarded the requested" not in blob
 
 
+def test_jsonl_sanitizes_events_when_retention_is_none(tmp_path: Path) -> None:
+    """A missing retention argument must mean privacy-first defaults for the
+    emitted events, never raw event content."""
+    run = _vulnerable_run(tmp_path)
+    blob = render_agent_jsonl(run)
+    assert CANARY not in blob
+    assert "Forwarded the requested" not in blob
+    for line in blob.strip().splitlines():
+        record = json.loads(line)
+        if record["record_type"] == "agent_event":
+            event = record["event"]
+            assert event.get("sanitized_arguments") is None
+            assert event.get("sanitized_result") is None
+            if event.get("event_type") == "final_response":
+                assert event.get("text") is None
+
+
 def test_jsonl_deterministic(tmp_path: Path) -> None:
     run = _vulnerable_run(tmp_path)
     first = render_agent_jsonl(run)

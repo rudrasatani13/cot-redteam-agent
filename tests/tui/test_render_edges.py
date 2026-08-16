@@ -162,7 +162,9 @@ async def test_run_tui_path_uses_interactive_when_available(
 
 
 @pytest.mark.asyncio
-async def test_run_tui_falls_back_to_rich(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_tui_falls_back_to_rich_when_textual_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import cot_redteam.tui.app as app_module
     import cot_redteam.tui.interactive as interactive_module
 
@@ -172,16 +174,38 @@ async def test_run_tui_falls_back_to_rich(monkeypatch: pytest.MonkeyPatch) -> No
         called["rich"] = True
         return 3
 
-    def boom_interactive(*args, **kwargs):
+    monkeypatch.setattr(interactive_module, "TEXTUAL_AVAILABLE", False)
+    monkeypatch.setattr(app_module, "_run_rich_live", fake_rich)
+    result = await app_module.run_tui(_mock_config(), interactive=True, environ=None)
+    assert result == 3
+    assert called["rich"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_tui_runtime_crash_does_not_restart_billed_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crash inside the interactive TUI must not silently start a second
+    (billed) evaluation through the Rich fallback dashboard."""
+    import cot_redteam.tui.app as app_module
+    import cot_redteam.tui.interactive as interactive_module
+
+    called = {"rich": False}
+
+    async def fake_rich(config, *, environ=None, refresh_hz=8.0):
+        called["rich"] = True
+        return 3
+
+    async def boom_interactive(*args, **kwargs):
         raise RuntimeError("textual broken")
 
     monkeypatch.setattr(interactive_module, "TEXTUAL_AVAILABLE", True)
     monkeypatch.setattr(interactive_module, "RICH_AVAILABLE", True)
     monkeypatch.setattr(interactive_module, "run_interactive_tui", boom_interactive)
     monkeypatch.setattr(app_module, "_run_rich_live", fake_rich)
-    result = await app_module.run_tui(_mock_config(), interactive=True, environ=None)
-    assert result == 3
-    assert called["rich"] is True
+    with pytest.raises(RuntimeError, match="textual broken"):
+        await app_module.run_tui(_mock_config(), interactive=True, environ=None)
+    assert called["rich"] is False
 
 
 @pytest.mark.asyncio

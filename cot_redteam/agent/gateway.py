@@ -14,7 +14,15 @@ Enforced before dispatch:
 - a maximum action count per run (reserved atomically under the concurrency
   semaphore so parallel calls cannot exceed it);
 - a per-call timeout;
-- a maximum concurrent tool-call bound.
+- a maximum concurrent tool-call bound;
+- optionally (``enforce_authorization=True``), denial of dispatch when the
+  trusted resolver derives an UNAUTHORIZED scope.
+
+Denied/rejected requests are bounded: recorded event arguments are truncated
+to the serialized-argument byte limit before recording, and only the first
+``max_denied_requests`` denials are recorded as full event pairs — further
+denials are counted (``denied_requests``) but not recorded, so a flood of
+hostile calls cannot consume unbounded trajectory/storage space.
 
 Authorization is decided by a TRUSTED scope resolver owned by the engine:
 ``scope_resolver(tool_name, validated_arguments)`` derives the scope the
@@ -79,6 +87,10 @@ class ToolLimitExceededError(ToolError):
     """The per-run action count limit was exceeded."""
 
 
+class ToolAuthorizationDeniedError(ToolError):
+    """The derived scope is unauthorized and enforcement is enabled."""
+
+
 class ToolTimeoutError(ToolError):
     """The tool call exceeded its per-call timeout."""
 
@@ -103,9 +115,11 @@ class ToolGateway:
         max_serialized_result_bytes: int = 65536,
         tool_timeout_seconds: float = 5.0,
         max_concurrent_tool_calls: int = 4,
+        max_denied_requests: int = 64,
         sanitize_arguments: SanitizeArguments | None = None,
         sanitize_result: SanitizeResult | None = None,
         authorization_policy: tuple[AuthorizationScope, ...] = (),
+        enforce_authorization: bool = False,
     ) -> None:
         self._world = world
         # Keep the producer-owned recorder private; targets receive only the
@@ -123,12 +137,24 @@ class ToolGateway:
         self.max_serialized_result_bytes = max(1, max_serialized_result_bytes)
         self.tool_timeout_seconds = tool_timeout_seconds
         self.max_concurrent_tool_calls = max(1, max_concurrent_tool_calls)
+        self.max_denied_requests = max(0, max_denied_requests)
+        # Observe-only by default: scenarios rely on unauthorized calls
+        # EXECUTING so the oracles can prove them from observed state.  When
+        # enforcement is enabled, a trusted-resolver UNAUTHORIZED verdict
+        # denies dispatch outright.
+        self.enforce_authorization = enforce_authorization
         self._sanitize_arguments = sanitize_arguments or (lambda args: dict(args))
         self._sanitize_result = sanitize_result or (lambda result: result)
         self._authorization_policy = tuple(authorization_policy)
         self._semaphore = asyncio.Semaphore(self.max_concurrent_tool_calls)
         self._actions_taken = 0
+        self._denied_requests = 0
         self._call_ids: set[str] = set()
+
+    @property
+    def denied_requests(self) -> int:
+        """Total requests rejected without dispatch (recorded or not)."""
+        return self._denied_requests
 
     # -- authorization ------------------------------------------------------
 
@@ -165,6 +191,23 @@ class ToolGateway:
             raise ToolError(f"duplicate call_id {call_id!r}")
         self._call_ids.add(call_id)
 
+    def _bounded_sanitized_arguments(self, arguments: Mapping[str, JsonValue]) -> JsonValue:
+        """Sanitized arguments bounded to the serialized byte limit.
+
+        Oversized arguments must never be recorded in full before rejection;
+        an over-limit payload is replaced by a small deterministic marker
+        carrying only its serialized size.
+        """
+        sanitized = self._sanitize_arguments(arguments)
+        try:
+            encoded = json.dumps(sanitized, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            return {"unserializable": True}
+        byte_length = len(encoded.encode("utf-8"))
+        if byte_length > self.max_serialized_argument_bytes:
+            return {"truncated": True, "serialized_bytes": byte_length}
+        return sanitized
+
     # -- execution ----------------------------------------------------------
 
     async def execute(
@@ -193,7 +236,7 @@ class ToolGateway:
             call_id=call_id,
             tool_name=tool_name,
             tool_version="1",
-            sanitized_arguments=self._sanitize_arguments(arguments),
+            sanitized_arguments=self._bounded_sanitized_arguments(arguments),
             requested_authorization_scope=requested_authorization,
             observed_authorization_scope=(derived,) if derived is not None else (),
             status=EventStatus.REQUESTED,
@@ -208,6 +251,13 @@ class ToolGateway:
             authorization_state: AuthorizationState,
             executed: bool = False,
         ) -> JsonValue:
+            self._denied_requests += 1
+            if self._denied_requests > self.max_denied_requests:
+                # Bounded denial recording: beyond the cap the denial is
+                # counted (denied_requests) but not recorded as full events,
+                # so a flood of rejected calls cannot consume unbounded
+                # trajectory/storage space.  The typed error still raises.
+                return {"error": error_code, "message": error_message}
             await self.__record_event(
                 ActionEvent(
                     event_type="action_event",
@@ -266,6 +316,20 @@ class ToolGateway:
             )
             raise ToolDeniedError(
                 f"tool {tool_name!r} not allowed by scenario {self.scenario_id!r}"
+            )
+        if self.enforce_authorization and observed is AuthorizationState.UNAUTHORIZED:
+            # Opt-in enforcement: the trusted resolver derived a scope no
+            # policy entry authorizes, so dispatch is denied outright and the
+            # denial is recorded as a typed DENIED action/result pair.
+            await fail(
+                error_code="authorization_denied",
+                error_message=(
+                    f"tool {tool_name!r} requires an unauthorized scope; dispatch denied"
+                ),
+                authorization_state=AuthorizationState.UNAUTHORIZED,
+            )
+            raise ToolAuthorizationDeniedError(
+                f"tool {tool_name!r} denied: derived scope is unauthorized"
             )
 
         try:
@@ -327,31 +391,36 @@ class ToolGateway:
                 )
                 raise WorldStateError(str(exc)[:500]) from exc
 
-        # The handler ran: record the executed ActionEvent with pre/post
-        # state digests BEFORE result serialization. A later result failure
-        # is a separate FAILED ToolResultReceived, never an erased action.
-        state_after = self._world.snapshot().digest
-        await self.__record_event(
-            ActionEvent(
-                event_type="action_event",
-                run_id=self._run_id,
-                session_id=self._session_id,
-                event_id=f"gw-{call_id}-action",
-                parent_event_id=parent_event_id,
-                agent_id=self._agent_id,
-                provenance=provenance,
-                call_id=call_id,
-                action_kind=tool_name,
-                resource=tool_name,
-                attempted=True,
-                executed=True,
-                requested_authorization_scope=requested_authorization,
-                observed_authorization_scope=(derived,) if derived is not None else (),
-                authorization_state=observed,
-                state_before_digest=state_before,
-                state_after_digest=state_after,
+            # The handler ran: record the executed ActionEvent with pre/post
+            # state digests BEFORE result serialization, still INSIDE the
+            # semaphore so the state_after snapshot and the event's sequence
+            # number cannot interleave with a concurrent call's interval.
+            # Nothing here re-acquires the semaphore, so no deadlock.  A
+            # later result failure is a separate FAILED ToolResultReceived,
+            # never an erased action.
+            state_after = self._world.snapshot().digest
+            await self.__record_event(
+                ActionEvent(
+                    event_type="action_event",
+                    run_id=self._run_id,
+                    session_id=self._session_id,
+                    event_id=f"gw-{call_id}-action",
+                    parent_event_id=parent_event_id,
+                    agent_id=self._agent_id,
+                    provenance=provenance,
+                    call_id=call_id,
+                    action_kind=tool_name,
+                    resource=tool_name,
+                    attempted=True,
+                    executed=True,
+                    requested_authorization_scope=requested_authorization,
+                    observed_authorization_scope=(derived,) if derived is not None else (),
+                    authorization_state=observed,
+                    state_before_digest=state_before,
+                    state_after_digest=state_after,
+                )
             )
-        )
+
         try:
             serialized_result = json.dumps(raw_result, ensure_ascii=False, sort_keys=True)
         except (TypeError, ValueError) as exc:

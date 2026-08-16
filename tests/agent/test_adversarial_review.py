@@ -19,7 +19,7 @@ from cot_redteam.agent.api import run_agent_scenario, save_replay_artifact
 from cot_redteam.agent.config import AgentRetentionSettings, AgentSecuritySettings
 from cot_redteam.agent.gateway import ToolGateway, ToolLimitExceededError
 from cot_redteam.agent.oracles.support import ApprovalBypassOracle
-from cot_redteam.agent.replay import run_regression_suite
+from cot_redteam.agent.replay import ReplayError, load_regression_suite, run_regression_suite
 from cot_redteam.agent.scenarios.support import support_fixture, support_scope_resolver
 from cot_redteam.agent.trajectory import TrajectoryRecorder
 from cot_redteam.agent.types import (
@@ -132,8 +132,15 @@ async def test_concurrent_max_actions_cannot_be_bypassed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_expected_outcome_mismatch_is_failed_regression(tmp_path: Path) -> None:
-    """expected=VERIFIED_EXPLOIT against a target that holds must exit 1."""
+async def test_expected_outcome_mismatch_is_failed_regression(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A patched target expected to hold that actually goes inconclusive
+    must exit 1 as a failed regression."""
+    import cot_redteam.agent.api as agent_api
+    from cot_redteam.agent.types import AgentOutcome
+
     with SQLiteRunStore(tmp_path / "agent.db") as store:
         run = await run_agent_scenario(
             scenario_id="support.indirect_prompt_injection.v1",
@@ -161,18 +168,51 @@ async def test_expected_outcome_mismatch_is_failed_regression(tmp_path: Path) ->
                     {
                         "artifact": "exploit.json",
                         "target": "patched",
-                        "expected": "VERIFIED_EXPLOIT",  # wrong expectation
+                        "expected": "INVARIANT_HELD",
                     }
                 ],
             }
         ),
         encoding="utf-8",
     )
+    original = agent_api.run_agent_scenario
+
+    async def inconclusive(**kwargs: object):
+        replayed = await original(**kwargs)  # type: ignore[arg-type]
+        return replayed.model_copy(update={"outcome": AgentOutcome.INCONCLUSIVE})
+
+    monkeypatch.setattr(agent_api, "run_agent_scenario", inconclusive)
     report = await run_regression_suite(suite_dir)
     assert report.exit_code == 1
     _entry, result = report.entries[0]
     assert result.status == "regression_mismatch"
-    assert "VERIFIED_EXPLOIT" in result.message
+    assert "INVARIANT_HELD" in result.message
+
+
+def test_regression_suite_rejects_exploit_expectation_for_patched_target(
+    tmp_path: Path,
+) -> None:
+    """Suites may not expect a patched/hold-style target to produce an
+    exploit: that combination is a load-time validation error."""
+    suite_dir = tmp_path / "suite"
+    suite_dir.mkdir()
+    (suite_dir / "suite.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [
+                    {
+                        "artifact": "exploit.json",
+                        "target": "patched",
+                        "expected": "VERIFIED_EXPLOIT",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ReplayError, match="invalid regression expectation"):
+        load_regression_suite(suite_dir)
 
 
 def test_storage_write_without_retention_is_rejected(tmp_path: Path) -> None:
