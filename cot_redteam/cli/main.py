@@ -723,7 +723,7 @@ async def _agent_scan_async(args: argparse.Namespace) -> int:
                         raise ConfigurationError(f"replay artifact is missing: {path}")
                     artifact_records.append(
                         ArtifactRecord(
-                            relative_path=str(path.relative_to(artifact_store.root)),
+                            relative_path=path.relative_to(artifact_store.root).as_posix(),
                             media_type=media_type,
                             byte_length=path.stat().st_size,
                             sha256=sha256_file(path),
