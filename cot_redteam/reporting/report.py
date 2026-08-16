@@ -8,6 +8,7 @@ from pathlib import Path
 from cot_redteam.core.types import EvaluationRun
 from cot_redteam.reporting.model import ReportModel
 from cot_redteam.reporting.renderers import render_csv, render_latex, render_markdown
+from cot_redteam.reporting.sarif import render_sarif
 from cot_redteam.storage.artifacts import ArtifactStore
 
 
@@ -15,18 +16,21 @@ class ReportFormat(str, Enum):
     MARKDOWN = "markdown"
     CSV = "csv"
     LATEX = "latex"
+    SARIF = "sarif"
 
 
 _EXTENSIONS = {
     ReportFormat.MARKDOWN: ".md",
     ReportFormat.CSV: ".csv",
     ReportFormat.LATEX: ".tex",
+    ReportFormat.SARIF: ".sarif.json",
 }
 
 _MEDIA = {
     ReportFormat.MARKDOWN: "text/markdown",
     ReportFormat.CSV: "text/csv",
     ReportFormat.LATEX: "application/x-tex",
+    ReportFormat.SARIF: "application/sarif+json",
 }
 
 
@@ -50,6 +54,8 @@ class ReportWriter:
             content = render_csv(report)
         elif fmt is ReportFormat.LATEX:
             content = render_latex(report)
+        elif fmt is ReportFormat.SARIF:
+            content = render_sarif(run)
         else:
             raise ValueError(f"unsupported format: {fmt}")
         name = filename or f"{run.run_id}{_EXTENSIONS[fmt]}"

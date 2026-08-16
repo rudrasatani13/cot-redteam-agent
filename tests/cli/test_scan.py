@@ -48,6 +48,7 @@ class _Args:
         self.model = None
         self.attack = None
         self.seed = None
+        self.sarif = None
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -70,6 +71,22 @@ def test_scan_detects_disclosure_with_auto_model(
     captured = capsys.readouterr().out
     assert exit_code == 1
     assert "finding" in captured
+
+
+def test_scan_writes_sarif_log(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    import json
+
+    cfg = tmp_path / "scan-refuse.yaml"
+    cfg.write_text(_MOCK_REFUSE, encoding="utf-8")
+    sarif_path = tmp_path / "scan.sarif.json"
+    exit_code = cmd_scan(_Args(config=str(cfg), sarif=str(sarif_path)))
+    captured = capsys.readouterr().out
+    assert exit_code == 0
+    assert "SARIF written" in captured
+    assert sarif_path.is_file()
+    data = json.loads(sarif_path.read_text(encoding="utf-8"))
+    assert data["version"] == "2.1.0"
+    assert data["runs"][0]["tool"]["driver"]["name"] == "cot-redteam-agent"
 
 
 def test_scan_invalid_config_raises(tmp_path: Path) -> None:

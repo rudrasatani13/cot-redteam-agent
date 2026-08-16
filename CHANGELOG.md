@@ -22,6 +22,21 @@ Security- and correctness-focused hardening pass over the full audit of the
 - Added `AGENTS.md` (on-boarding contract for AI contributors) and
   `docs/roadmap.md` (phased direction for v0.7+).
 
+- **SARIF export**: `cot-redteam scan --sarif PATH` and
+  `cot-redteam report --format sarif` write SARIF 2.1.0 logs (results are
+  error for disclosures, warning for triggered monitors, note for
+  incomplete items; clean runs emit no results). Every rule carries its
+  OWASP GenAI LLM Top 10 (2026) tags and the mapping version so scanner
+  output matches the report tags. New `reporting/sarif.py`.
+- **Scheduled CI scan**: new `nightly-scan.yml` (02:00 UTC + manual
+  dispatch) runs an offline clean compliance scan with a SARIF log, the
+  agent exploit path, exact replay, and patched-target regression suites
+  as a regression tripwire between releases.
+- **TUI mount race fixed**: the first dashboard render is deferred past
+  `on_mount` via `set_timer`, and the periodic renderer skips regions
+  that are not yet mounted instead of crashing (observed on Python 3.10
+  CI as `No nodes match '#hdr'`).
+
 ### Fixed — scoring integrity
 
 - **Refusal re-quotes are never compliant disclosure**: refusal analysis now

@@ -27,6 +27,7 @@ try:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
     from textual.containers import Horizontal, Vertical
+    from textual.css.query import NoMatches
     from textual.widgets import Header, Input, Static
 
     TEXTUAL_AVAILABLE = True
@@ -240,7 +241,12 @@ if TEXTUAL_AVAILABLE:
             self._consumer_task = asyncio.create_task(self._consume_events())
             self.set_interval(0.15, self._refresh_dashboard)
             self.query_one("#command", Input).focus()
-            self._refresh_dashboard()
+            # Defer the first dashboard render: on fast event loops compose
+            # children can still be attaching when on_mount fires (observed
+            # on Python 3.10 CI), and the immediate query_one would raise
+            # NoMatches. The timer fires after mount settles; the interval
+            # refresh below self-heals any skipped frame.
+            self.set_timer(0.0, self._refresh_dashboard)
             if self._auto_start:
                 self.action_run()
 
@@ -257,13 +263,27 @@ if TEXTUAL_AVAILABLE:
             return f"{st} · educational canary red-team"
 
         def _refresh_dashboard(self) -> None:
-            """Update each region so #mid can flex-fill remaining height."""
-            self.query_one("#hdr", Static).update(render_header(self.state))
-            self.query_one("#models", Static).update(render_model_board(self.state, max_rows=3))
-            self.query_one("#now", Static).update(render_now(self.state))
-            self.query_one("#timeline", Static).update(render_timeline(self.state, limit=50))
-            self.query_one("#output", Static).update(render_output(self.state))
-            self.query_one("#leak", Static).update(render_leak(self.state))
+            """Update each region so #mid can flex-fill remaining height.
+
+            Regions that have not mounted yet (early ticks, or a region
+            re-mounted after an error) are skipped: a missing node must never
+            crash the periodic renderer — the next interval refresh renders
+            it as soon as it exists.
+            """
+            updates = (
+                ("#hdr", lambda: render_header(self.state)),
+                ("#models", lambda: render_model_board(self.state, max_rows=3)),
+                ("#now", lambda: render_now(self.state)),
+                ("#timeline", lambda: render_timeline(self.state, limit=50)),
+                ("#output", lambda: render_output(self.state)),
+                ("#leak", lambda: render_leak(self.state)),
+            )
+            for selector, render in updates:
+                try:
+                    node = self.query_one(selector, Static)
+                except NoMatches:
+                    continue
+                node.update(render())
             self.sub_title = self._subtitle()
 
         async def _consume_events(self) -> None:

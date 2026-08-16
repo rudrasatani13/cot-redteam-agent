@@ -1,0 +1,87 @@
+name: nightly-scan
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # 02:00 UTC daily: offline red-team regression tripwire
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-scan:
+    name: Offline red-team scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          # Replay provenance checks require commit ancestry.
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - name: Install hash-locked dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install --require-hashes -r requirements-dev.lock
+          python -m pip install --no-deps -e .
+      - name: Clean compliance scan (mock refuse) + SARIF log
+        run: |
+          WORK="$(mktemp -d)"
+          cat > "$WORK/scan.yaml" <<'YAML'
+          version: 2
+          global:
+            seed: 1
+            output_dir: ./results-scan
+            concurrency: 1
+          providers:
+            mock:
+              kind: mock
+              mock_mode: refuse
+          evaluation:
+            models:
+              - mock:target
+            dataset_path: pkg:sample.jsonl
+            # scan re-imposes a 40-request cap; one sample keeps the
+            # honest clean verdict within budget.
+            sample_count: 1
+            budgets:
+              max_requests: 40
+              max_elapsed_seconds: 300
+            retain_prompts: false
+            retain_responses: false
+          storage:
+            path: ./results-scan/cot_redteam.db
+          YAML
+          cd "$WORK"
+          cot-redteam config validate --config scan.yaml
+          cot-redteam scan --config scan.yaml --sarif scan.sarif.json
+          SCAN=$?
+          if [ "$SCAN" -ne 0 ]; then echo "nightly scan expected clean (exit 0), got $SCAN"; exit 1; fi
+          test -s scan.sarif.json
+          python - <<'PY'
+          import json
+          data = json.load(open("scan.sarif.json"))
+          assert data["version"] == "2.1.0"
+          assert data["runs"][0]["results"] == []
+          print("nightly clean scan SARIF ok")
+          PY
+      - name: Agent exploit path still deterministic
+        run: |
+          WORK="$(mktemp -d)"
+          cp cot_redteam/data/agent_security.example.yaml "$WORK/agent.yaml"
+          mkdir -p "$WORK/security_regressions"
+          cp tests/fixtures/security_regressions/* "$WORK/security_regressions/"
+          cd "$WORK"
+          set +e
+          cot-redteam agent scan --config agent.yaml >/tmp/scan.out 2>&1
+          SCAN=$?
+          if [ "$SCAN" -ne 1 ]; then echo "agent scan expected exit 1 (exploit reproduced), got $SCAN"; cat /tmp/scan.out; exit 1; fi
+          REPLAY="$(ls -1 artifacts/*/replay.json | head -1)"
+          cot-redteam replay "$REPLAY" >/tmp/replay.out 2>&1
+          REPLAY_EXIT=$?
+          if [ "$REPLAY_EXIT" -ne 1 ]; then echo "replay expected exit 1, got $REPLAY_EXIT"; cat /tmp/replay.out; exit 1; fi
+          cot-redteam regress --suite security_regressions >/tmp/regress.out 2>&1
+          REGRESS=$?
+          if [ "$REGRESS" -ne 0 ]; then echo "regress expected exit 0 (patched targets hold), got $REGRESS"; cat /tmp/regress.out; exit 1; fi
+          echo "nightly agent exploit/replay/regress ok (scan=$SCAN replay=$REPLAY_EXIT regress=$REGRESS)"
