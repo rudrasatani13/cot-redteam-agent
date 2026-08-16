@@ -261,7 +261,9 @@ def test_benchmark_csv_neutralizes_every_column() -> None:
     assert by_column["transformation_id"] == "'\tCMD('transform')"
     assert by_column["scorer_id"] == "'=CMD('scorer')"
     assert by_column["scorer_version"] == "'@CMD('version')"
-    assert by_column["error"] == "'\rCMD('error')"
+    # Lone CR is flattened (invalid inside an unquoted CSV cell; Python
+    # 3.10's writer does not quote it), keeping the formula-trigger prefix.
+    assert by_column["error"] == "' CMD('error')"
 
 
 def test_primary_scorer_selection_is_independent_of_scorer_order() -> None:

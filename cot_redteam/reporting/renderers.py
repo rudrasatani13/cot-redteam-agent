@@ -33,10 +33,13 @@ def csv_neutralize(value: str) -> str:
 
     Shared by every CSV writer in the reporting package so hostile strings
     cannot execute as formulas when a report is opened in a spreadsheet.
+    Bare carriage returns (not part of a ``\r\n`` pair) are flattened to a
+    space: they are invalid inside unquoted CSV cells and trip the strict
+    reader on Python 3.10 (whose writer does not quote lone ``\r`` fields).
     """
     if value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
-        return "'" + value
-    return value
+        value = "'" + value
+    return re.sub(r"\r(?!\n)", " ", value)
 
 
 # Markdown sigils are backslash-escaped and HTML-significant characters are
