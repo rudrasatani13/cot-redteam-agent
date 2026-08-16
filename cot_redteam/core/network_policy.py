@@ -33,6 +33,9 @@ class EndpointPolicyError(ValueError):
 # bits and must be policy-checked like any other IPv4 address.
 _NAT64_NETWORK = ipaddress.IPv6Network("64:ff9b::/96")
 
+#: Effective port used when a URL omits an explicit port.
+_SCHEME_DEFAULT_PORTS = {"http": 80, "https": 443}
+
 
 @dataclass(frozen=True)
 class URLValidation:
@@ -88,6 +91,10 @@ class EndpointPolicy:
         except ValueError as exc:
             # Out-of-range ports raise bare ValueError from urlparse.
             raise EndpointPolicyError(f"URL {url!r} has an invalid port: {exc}") from exc
+        if port is None and parsed.scheme in _SCHEME_DEFAULT_PORTS:
+            # A URL with no explicit port uses the scheme default (http=80,
+            # https=443); compare that effective port against the allowlist.
+            port = _SCHEME_DEFAULT_PORTS[parsed.scheme]
         if self.allowed_ports and port not in self.allowed_ports:
             raise EndpointPolicyError(
                 f"port {port!r} not allowed; allowed: "

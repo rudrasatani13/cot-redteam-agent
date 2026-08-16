@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from cot_redteam.agent.config import AgentSecuritySettings
+from cot_redteam.agent.config import AgentRetentionSettings, AgentSecuritySettings
 from cot_redteam.agent.gateway import ToolGateway
 from cot_redteam.agent.oracles.base import OracleRunner
 from cot_redteam.agent.oracles.support import support_oracle
@@ -372,6 +372,56 @@ class AgentExecutionEngine:
             await self.target.run(request, runtime)
         except Exception as exc:  # noqa: BLE001 - honest partial/failed semantics
             target_error = self._sanitize_runtime_error(str(exc)[:500])
+        try:
+            run = self._assemble_run(
+                run_id=run_id,
+                session_id=session_id,
+                started_at=started_at,
+                seed=seed,
+                pre=pre,
+                target_error=target_error,
+                recorder=recorder,
+                retention_settings=retention_settings,
+            )
+        except Exception as exc:  # noqa: BLE001 - engine must always finalize
+            # Any unexpected failure in the post-target pipeline (oracle
+            # collection, sanitization, findings build) must still produce a
+            # terminal AgentRun so the DB row never stays 'running' forever.
+            run = self._error_run(
+                run_id=run_id,
+                session_id=session_id,
+                started_at=started_at,
+                seed=seed,
+                exc=exc,
+                pre=pre,
+                recorder=recorder,
+            )
+        if store is not None:
+            store.finalize_agent_run(  # type: ignore[attr-defined]
+                run,
+                retention=retention_settings,
+                manifest=self.manifest,
+            )
+        return run
+
+    def _assemble_run(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        started_at: datetime,
+        seed: int,
+        pre: Any,
+        target_error: str | None,
+        recorder: TrajectoryRecorder,
+        retention_settings: AgentRetentionSettings,
+    ) -> AgentRun:
+        """Build the final AgentRun from post-target evidence.
+
+        Raises on unexpected pipeline failures (oracle registry drift,
+        sanitization errors, ...); callers convert that into a terminal
+        ERROR run.
+        """
         post = self.world.snapshot()
         trajectory = recorder.build_trajectory()
         oracle_results = AgentSanitizer(
@@ -429,7 +479,7 @@ class AgentExecutionEngine:
                 "world_values": retention_settings.retain_world_values,
             },
         }
-        run = AgentRun(
+        return AgentRun(
             run_id=run_id,
             session_id=session_id,
             scenario_ref=VersionedRef(id=self.scenario.id, version=self.scenario.version),
@@ -453,13 +503,59 @@ class AgentExecutionEngine:
             error=self._sanitize_runtime_error(target_error),
             metadata=metadata,
         )
-        if store is not None:
-            store.finalize_agent_run(  # type: ignore[attr-defined]
-                run,
-                retention=retention_settings,
-                manifest=self.manifest,
-            )
-        return run
+
+    def _error_run(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        started_at: datetime,
+        seed: int,
+        exc: Exception,
+        pre: Any,
+        recorder: TrajectoryRecorder,
+    ) -> AgentRun:
+        """Build a terminal ERROR AgentRun after an unexpected pipeline failure.
+
+        The engine's contract is a returned AgentRun: an unexpected
+        exception in the post-target pipeline must still produce a terminal
+        row (status/outcome ERROR, sanitized error, no findings) instead of
+        escaping run() and leaving the DB row stuck in 'running'.
+        """
+        sanitized = self._sanitize_runtime_error(f"{type(exc).__name__}: {exc}"[:500])
+        try:
+            trajectory = recorder.build_trajectory()
+        except Exception:  # noqa: BLE001 - never mask the run error
+            trajectory = AgentTrajectory(run_id=run_id, session_id=session_id, events=())
+        try:
+            budget_snapshot = _budget_snapshot(self.budget, self.invocation_service)
+        except Exception:  # noqa: BLE001 - never mask the run error
+            budget_snapshot = {}
+        digest = pre.digest if pre is not None else None
+        return AgentRun(
+            run_id=run_id,
+            session_id=session_id,
+            scenario_ref=VersionedRef(id=self.scenario.id, version=self.scenario.version),
+            target_ref=VersionedRef(id=self.target.id, version=self.target.version),
+            world_ref=VersionedRef(id=self.world.world_id, version=self.world.world_version),
+            attack_ref=VersionedRef(
+                id=f"scripted:{self.fixture.fixture}",
+                version=self.fixture.version,
+            ),
+            status=_status_for_outcome(AgentOutcome.ERROR),
+            outcome=AgentOutcome.ERROR,
+            trajectory=trajectory,
+            original_trajectory_digest=trajectory.digest,
+            pre_snapshot_digest=digest,
+            post_snapshot_digest=digest,
+            oracle_results=(),
+            findings=(),
+            budget_snapshot=budget_snapshot,
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc),
+            error=sanitized or f"{type(exc).__name__}: {exc}"[:500],
+            metadata={"seed": seed},
+        )
 
     def _begin_run_row(
         self,

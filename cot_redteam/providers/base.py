@@ -76,10 +76,13 @@ class RetryPolicy:
     jitter: float = 0.1
 
     def delay_for_attempt(self, attempt: int) -> float:
-        delay = min(self.max_delay_seconds, self.base_delay_seconds * (2**attempt))
+        # Jitter applies inside the cap so delays never exceed
+        # max_delay_seconds (previously the cap was applied before jitter,
+        # letting backoff overshoot by up to jitter%).
+        delay = self.base_delay_seconds * (2**attempt)
         if self.jitter:
             delay *= 1.0 + random.uniform(-self.jitter, self.jitter)
-        return float(max(0.0, delay))
+        return float(min(self.max_delay_seconds, max(0.0, delay)))
 
 
 async def default_sleep(seconds: float) -> None:

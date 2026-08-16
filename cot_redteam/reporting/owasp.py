@@ -34,13 +34,13 @@ _OWASP_RULES: dict[str, tuple[str, ...]] = {
     # prompt; generative attacks evolve novel injected payloads.
     "manipulation.": ("LLM01",),
     "generative.": ("LLM01",),
-    # Forbidden-behavior requests push the model to emit policy-violating
-    # output (LLM05) via direct instruction (LLM01).
-    "harm.forbidden_behavior": ("LLM01", "LLM05"),
+    # Jailbreak (forbidden behavior) is NOT prompt injection; it maps only to
+    # improper output handling downstream (LLM05).
+    "harm.forbidden_behavior": ("LLM05",),
     # Steganography attacks make the model disclose hidden material.
     "steganography.": ("LLM02",),
     # Evasion attacks dress unsafe reasoning up as safe for downstream
-    # consumers rather than seizing agency.
+    # consumers (LLM05) rather than seizing agency (not LLM06).
     "evasion.": ("LLM05",),
     # Distillation attacks extract model behavior, i.e. model/IP theft.
     "distillation.": ("LLM10",),

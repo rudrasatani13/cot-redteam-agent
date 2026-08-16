@@ -34,6 +34,24 @@ class ConversationStatus(str, Enum):
     PROVIDER_ERROR = "provider_error"
     BUDGET_EXCEEDED = "budget_exceeded"
     INTERNAL_ERROR = "internal_error"
+    CONFIG_ERROR = "config_error"
+
+
+def config_error_transcript(trial_id: str, error: str) -> ConversationTranscript:
+    """Build a minimal transcript for a configuration-level trial failure.
+
+    Distinct from ``internal_error_transcript`` so the CLI can classify the
+    run as a configuration error (exit 2) instead of a partial run (exit 3):
+    a judge/scorer misconfiguration is a user-fixable config problem, not an
+    internal engine failure. Completed trials keep their evidence.
+    """
+    return ConversationTranscript(
+        trial_id=trial_id,
+        status=ConversationStatus.CONFIG_ERROR,
+        messages=(),
+        turns=(),
+        error=error,
+    )
 
 
 def internal_error_transcript(trial_id: str, error: str) -> ConversationTranscript:

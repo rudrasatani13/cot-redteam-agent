@@ -140,3 +140,29 @@ async def test_unexpected_trial_exception_is_isolated_not_fatal(
     # The internal-error trial carries no success evidence: never clean.
     assert not errored.scoring.outcomes
     assert all(not outcome.eligible for outcome in errored.scoring.outcomes)
+
+
+async def test_config_error_trial_is_typed_config_error_not_internal() -> None:
+    """Regression: a ConfigurationError raised inside trial execution (e.g.
+    a judge scorer missing its rubric) must be typed CONFIG_ERROR — not
+    swallowed as INTERNAL_ERROR — so the CLI can exit 2 (config error)
+    instead of 3 (partial) while completed trials keep their evidence."""
+    import types
+
+    from cot_redteam.core.errors import ConfigurationError
+
+    config = load_config(Path("tests/fixtures/config/minimal.yaml"))
+    engine = BenchmarkEngine(
+        config,
+        FakeFactory(EchoProvider()),
+        BudgetTracker(config.evaluation.budgets),
+    )
+
+    async def _bomb(trial):
+        raise ConfigurationError("judge scorer 'evidence_judge' requires a non-empty rubric")
+
+    engine._run_trial = _bomb  # type: ignore[method-assign]
+    trial = types.SimpleNamespace(trial_id="audit:trial:1")
+    result = await engine._run_trial_safe(trial)  # type: ignore[arg-type]
+    assert result.transcript.status.value == "config_error"
+    assert "non-empty rubric" in (result.transcript.error or "")

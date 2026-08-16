@@ -460,6 +460,9 @@ if TEXTUAL_AVAILABLE:
                 if mode not in {"adaptive", "fixed", "agentic", "agent"}:
                     self._note("usage: /effort agentic|adaptive|fixed", ok=False)
                     return
+                # Explicit effort selects the attack too; a previous /attack
+                # choice no longer applies.
+                self.state.attack_explicit = False
                 if mode in {"agentic", "agent"}:
                     self.state.effort = "agentic"
                     self.state.attack_id = "injection.system_canary_agent"

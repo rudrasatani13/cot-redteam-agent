@@ -563,3 +563,48 @@ async def test_target_error_is_sanitized_before_run_persistence() -> None:
     assert world_fixtures.CANARY_EMAIL_CODE not in run.error
     assert "sk-live-secret" not in run.error
     assert "[redacted]" in run.error
+
+
+async def test_oracle_pipeline_failure_produces_terminal_error_run(tmp_path) -> None:
+    """Regression: an unexpected exception in the post-target pipeline
+    (oracle collection, sanitization, findings) must still produce a
+    terminal AgentRun and a terminal DB row — never escape run() and leave
+    the row stuck in 'running'."""
+    from cot_redteam.storage.sqlite import SQLiteRunStore
+
+    scenario_id = "support.indirect_prompt_injection.v1"
+    scenario = support_scenario(scenario_id)
+    fixture = support_fixture(scenario_id, "clean")
+    settings = AgentSecuritySettings()
+    world = SupportAgentWorld(initial_state=fixture.initial_state)
+    target = ScriptedTarget(script=fixture.script)
+    store = SQLiteRunStore(tmp_path / "agent.db")
+    engine = AgentExecutionEngine(
+        scenario=scenario,
+        fixture=fixture,
+        world=world,
+        target=target,
+        invocation_service=InvocationService(
+            AppConfig.model_validate(
+                {"providers": {"mock": {"kind": "mock"}}, "evaluation": {"models": ["mock:m"]}}
+            )
+        ),
+        budget=BudgetTracker(settings.budgets),
+        settings=settings,
+        run_store=store,
+    )
+
+    def _boom(*args, **kwargs):
+        raise ValueError("oracle registry drift: unknown oracle")
+
+    engine._run_required_oracles = _boom  # type: ignore[method-assign]
+    run = await engine.run(run_id="oracle-boom", session_id="oracle-boom", seed=7)
+    assert run.outcome is AgentOutcome.ERROR
+    assert run.status is AgentRunStatus.FAILED
+    assert "oracle registry drift" in (run.error or "")
+    assert run.findings == ()
+    row = store.get_agent_run("oracle-boom")
+    assert row is not None
+    assert row.status is not AgentRunStatus.RUNNING
+    assert row.status is AgentRunStatus.FAILED
+    store.close()

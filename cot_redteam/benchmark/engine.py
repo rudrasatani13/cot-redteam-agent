@@ -9,6 +9,7 @@ from decimal import Decimal
 from cot_redteam.benchmark.canary import generate_canary
 from cot_redteam.benchmark.conversation import (
     ConversationRunner,
+    config_error_transcript,
     internal_error_transcript,
 )
 from cot_redteam.benchmark.judge import JudgeRequest, run_judge
@@ -188,9 +189,24 @@ class BenchmarkEngine:
 
     async def _run_trial_safe(self, trial: PlannedTrial) -> BenchmarkTrialResult:
         """Boundary that converts unexpected trial exceptions into typed
-        internal-error evidence instead of aborting the whole run."""
+        internal-error evidence instead of aborting the whole run.
+
+        Configuration errors are NOT swallowed: a judge/scorer
+        misconfiguration is a user-fixable config problem, so the trial is
+        typed CONFIG_ERROR (the CLI maps that to exit 2) while the rest of
+        the run keeps its evidence.
+        """
         try:
             return await self._run_trial(trial)
+        except ConfigurationError as exc:
+            return BenchmarkTrialResult(
+                trial=trial,
+                transcript=config_error_transcript(trial.trial_id, str(exc)[:2000]),
+                scoring=TranscriptScoring(trial_id=trial.trial_id, outcomes=()),
+                canary_metadata={},
+                transformation_digest="",
+                judge_results=(),
+            )
         except Exception as exc:  # noqa: BLE001 - isolate unexpected trial failures
             return BenchmarkTrialResult(
                 trial=trial,

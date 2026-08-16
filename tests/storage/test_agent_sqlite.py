@@ -16,6 +16,7 @@ from cot_redteam.agent.types import (
     ToolCallRequested,
     ToolResultReceived,
 )
+from cot_redteam.core.types import EvaluationRun
 from cot_redteam.eval.manifest import build_agent_manifest
 from cot_redteam.storage.sqlite import SQLiteRunStore
 
@@ -529,7 +530,14 @@ def test_begin_agent_run_rejects_duplicate_without_deleting_evidence(tmp_path: P
     asyncio.run(_run())
 
 
-def test_finalize_rejects_terminal_or_interrupted_rows(tmp_path: Path) -> None:
+def test_finalize_is_idempotent_for_terminal_or_recovered_rows(tmp_path: Path) -> None:
+    """Finalization of an already-terminal row is a benign no-op, not an error.
+
+    A concurrent ``recover_incomplete_agent_runs()`` can mark a still-
+    finalizing scenario's row INTERRUPTED; the old raise escaped
+    run_agent_scenario and lost the run. Terminal rows keep their state;
+    identity mismatches still raise.
+    """
     import asyncio
 
     async def _run() -> None:
@@ -541,8 +549,8 @@ def test_finalize_rejects_terminal_or_interrupted_rows(tmp_path: Path) -> None:
                 run_store=store,
                 run_id="terminal-run",
             )
-            with pytest.raises(ValueError, match="only RUNNING"):
-                store.finalize_agent_run(run, retention=AgentRetentionSettings())
+            # Row already COMPLETED: finalize is a no-op (no raise).
+            store.finalize_agent_run(run, retention=AgentRetentionSettings())
             assert store.get_agent_run(run.run_id).status is AgentRunStatus.COMPLETED  # type: ignore[union-attr]
 
             interrupted = run.model_copy(
@@ -558,8 +566,8 @@ def test_finalize_rejects_terminal_or_interrupted_rows(tmp_path: Path) -> None:
             candidate = interrupted.model_copy(
                 update={"status": AgentRunStatus.FAILED, "completed_at": run.completed_at}
             )
-            with pytest.raises(ValueError, match="only RUNNING"):
-                store.finalize_agent_run(candidate, retention=AgentRetentionSettings())
+            # Row recovered to INTERRUPTED: finalize is a no-op (no raise).
+            store.finalize_agent_run(candidate, retention=AgentRetentionSettings())
             assert store.get_agent_run("interrupted-run").status is AgentRunStatus.INTERRUPTED  # type: ignore[union-attr]
 
             identity_shell = run.model_copy(
@@ -580,6 +588,8 @@ def test_finalize_rejects_terminal_or_interrupted_rows(tmp_path: Path) -> None:
                     ),
                 }
             )
+            # Identity mismatch is still a hard error: never finalize a run
+            # whose refs disagree with the row it was begun under.
             with pytest.raises(ValueError, match="identity"):
                 store.finalize_agent_run(forged, retention=AgentRetentionSettings())
             assert (
@@ -745,3 +755,271 @@ def test_agent_store_rejects_invalid_begin_and_finalize_states(tmp_path: Path) -
         store.close()
 
     asyncio.run(_run())
+
+
+def test_finalize_is_idempotent_after_recovery(tmp_path: Path) -> None:
+    """Regression: recover marking a row INTERRUPTED mid-run must not make
+    the run's own finalize raise (the old ValueError escaped the scenario
+    runner and lost the run)."""
+    import asyncio
+
+    async def _run() -> None:
+        with _store(tmp_path) as store:
+            run = await run_agent_scenario(
+                scenario_id="support.approval_bypass.v1",
+                fixture="clean",
+                seed=7,
+                run_store=store,
+                run_id="recovered-run",
+            )
+            # Simulate the concurrent recovery that fired while the scenario
+            # was still finalizing: mark the row INTERRUPTED, then finalize.
+            store.connection.execute(
+                "UPDATE agent_runs SET status = ? WHERE run_id = ?",
+                (AgentRunStatus.INTERRUPTED.value, "recovered-run"),
+            )
+            store.connection.commit()
+            store.finalize_agent_run(run, retention=AgentRetentionSettings())
+            row = store.get_agent_run("recovered-run")
+            assert row is not None
+            assert row.status is AgentRunStatus.INTERRUPTED
+
+    asyncio.run(_run())
+
+
+def test_partial_schema_recovers_on_reopen(tmp_path: Path) -> None:
+    """Regression: a migration interrupted mid-way (old executescript left
+    some tables created, schema_migrations never recorded) must not brick
+    the store — reopening runs the remaining statements and records the
+    versions (IF NOT EXISTS + per-statement transaction)."""
+    import sqlite3
+
+    db = tmp_path / "bricked.db"
+    conn = sqlite3.connect(str(db))
+    # Simulate the half-applied migration 1: the table exists but the
+    # migration version was never recorded.
+    conn.execute(
+        "CREATE TABLE runs (run_id TEXT PRIMARY KEY, status TEXT NOT NULL, "
+        "started_at TEXT NOT NULL, completed_at TEXT, metadata_json TEXT NOT NULL, "
+        "manifest_json TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    with SQLiteRunStore(db) as store:
+        tables = {
+            row[0]
+            for row in store.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert "runs" in tables
+        assert "evaluation_items" in tables
+        versions = {
+            row[0] for row in store.connection.execute("SELECT version FROM schema_migrations")
+        }
+        assert versions == {1, 2, 3, 4}
+        store.connection.execute(
+            "INSERT INTO runs(run_id, status, started_at, metadata_json) VALUES (?, ?, ?, ?)",
+            ("r1", "completed", "2026-01-01T00:00:00Z", "{}"),
+        )
+        store.connection.commit()
+
+
+def test_migration_failure_raises_storage_error_with_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing migration is reported as a StorageError carrying the version
+    (not a bare sqlite error) so a bricked store explains itself."""
+    import cot_redteam.storage.sqlite as sqlite_module
+    from cot_redteam.core.errors import StorageError
+
+    original_migrations = list(sqlite_module.MIGRATIONS)
+
+    # OperationalError: duplicate table creation without IF NOT EXISTS.
+    monkeypatch.setattr(
+        sqlite_module,
+        "MIGRATIONS",
+        [
+            *original_migrations,
+            (9901, "CREATE TABLE migration_9901 (x TEXT); CREATE TABLE migration_9901 (x TEXT);"),
+        ],
+    )
+    with pytest.raises(StorageError, match="migration 9901 failed"):
+        SQLiteRunStore(tmp_path / "op-failure.db")
+
+    # IntegrityError: duplicate primary key insert inside one migration.
+    monkeypatch.setattr(
+        sqlite_module,
+        "MIGRATIONS",
+        [
+            *original_migrations,
+            (
+                9902,
+                "CREATE TABLE migration_9902 (id INTEGER PRIMARY KEY);"
+                "INSERT INTO migration_9902(id) VALUES (1);"
+                "INSERT INTO migration_9902(id) VALUES (1);",
+            ),
+        ],
+    )
+    with pytest.raises(StorageError, match="migration 9902 failed integrity"):
+        SQLiteRunStore(tmp_path / "pk-failure.db")
+
+
+def test_wrap_sqlite_failure_taxonomy() -> None:
+    """Raw sqlite failures map to the public StorageError taxonomy."""
+    import sqlite3
+
+    from cot_redteam.core.errors import StorageError
+    from cot_redteam.storage.sqlite import _wrap_sqlite_failure
+
+    integrity = _wrap_sqlite_failure(sqlite3.IntegrityError("UNIQUE constraint failed"))
+    assert isinstance(integrity, StorageError)
+    assert "integrity constraint" in str(integrity)
+    operational = _wrap_sqlite_failure(sqlite3.OperationalError("database is locked"))
+    assert isinstance(operational, StorageError)
+    assert "operational" in str(operational)
+
+
+def test_dt_and_parse_helpers() -> None:
+    from cot_redteam.storage.sqlite import _dt, _parse_dt
+
+    assert _dt(None) is None
+    assert _parse_dt(None) is None
+    parsed = _parse_dt("2026-01-01T00:00:00Z")
+    assert parsed is not None and parsed.tzinfo is not None
+
+
+def _eval_run(run_id: str, item_id: str) -> EvaluationRun:
+    from datetime import datetime, timezone
+
+    from cot_redteam.core.types import (
+        EvaluationItem,
+        ItemStatus,
+        ModelRef,
+        RunSummary,
+    )
+
+    item = EvaluationItem(
+        item_id=item_id,
+        model=ModelRef.parse("mock:m"),
+        attack_id="a",
+        sample_id="s",
+        status=ItemStatus.PROVIDER_ERROR,
+        error="e",
+    )
+    summary = RunSummary.from_items([item])
+    return EvaluationRun(
+        run_id=run_id,
+        status=summary.status,
+        items=(item,),
+        summary=summary,
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+    )
+
+
+def test_save_wraps_integrity_failure(tmp_path: Path) -> None:
+    """save() surfaces constraint violations as StorageError, not sqlite3."""
+    from cot_redteam.core.errors import StorageError
+
+    with _store(tmp_path) as store:
+        store.save(_eval_run("run-a", "shared-item"))
+        with pytest.raises(StorageError, match="integrity constraint"):
+            store.save(_eval_run("run-b", "shared-item"))
+
+
+def test_get_manifest_non_dict_json_returns_none(tmp_path: Path) -> None:
+    """A manifest that is not a JSON object reads back as absent."""
+    with _store(tmp_path) as store:
+        assert store.get_manifest("missing-run") is None
+        run = _eval_run("manifest-run", "item-1")
+        store.save(run)
+        store.connection.execute(
+            "UPDATE runs SET manifest_json = ? WHERE run_id = ?",
+            ("[1, 2, 3]", run.run_id),
+        )
+        store.connection.commit()
+        assert store.get_manifest(run.run_id) is None
+
+
+def test_get_run_invalid_timestamps_raises(tmp_path: Path) -> None:
+    """Corrupt run timestamps fail loudly instead of being silently replaced."""
+    from cot_redteam.core.errors import StorageError
+
+    with _store(tmp_path) as store:
+        run = _eval_run("stamp-run", "item-1")
+        store.save(run)
+        store.connection.execute(
+            "UPDATE runs SET started_at = '' WHERE run_id = ?",
+            (run.run_id,),
+        )
+        store.connection.commit()
+        with pytest.raises(StorageError, match="invalid timestamps"):
+            store.get(run.run_id)
+
+
+def test_finalize_rejects_tampered_stored_digest(tmp_path: Path) -> None:
+    """Proof anchors are identity-checked: a tampered stored digest fails
+    finalization instead of being silently overwritten."""
+    import asyncio
+
+    async def _run() -> None:
+        with _store(tmp_path) as store:
+            real_finalize = store.finalize_agent_run
+
+            def tamper_then_finalize(run, *args, **kwargs):
+                store.connection.execute(
+                    "UPDATE agent_runs SET trajectory_digest = ? WHERE run_id = ?",
+                    ("tampered" * 8, run.run_id),
+                )
+                store.connection.commit()
+                return real_finalize(run, *args, **kwargs)
+
+            store.finalize_agent_run = tamper_then_finalize  # type: ignore[method-assign]
+            with pytest.raises(ValueError, match="does not match"):
+                await run_agent_scenario(
+                    scenario_id="support.approval_bypass.v1",
+                    fixture="clean",
+                    seed=7,
+                    run_store=store,
+                    run_id="tampered-digest",
+                )
+
+    asyncio.run(_run())
+
+
+def test_update_agent_manifest_rejects_unknown_and_running_runs(tmp_path: Path) -> None:
+    """Manifest attachment is fail-closed for unknown or RUNNING rows."""
+    from cot_redteam.core.errors import StorageError
+
+    with _store(tmp_path) as store:
+        with pytest.raises(StorageError, match="does not exist"):
+            store.update_agent_manifest("ghost-run", {"run_id": "ghost-run"})
+        store.connection.execute(
+            """
+            INSERT INTO agent_runs(
+                run_id, session_id, schema_version, scenario_id, scenario_version,
+                target_id, target_version, world_id, world_version, attack_id,
+                attack_version, status, started_at, budget_json, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "running-run",
+                "sess",
+                1,
+                "scenario",
+                "1",
+                "target",
+                "1",
+                "world",
+                "1",
+                "attack",
+                "1",
+                AgentRunStatus.RUNNING.value,
+                "2026-01-01T00:00:00Z",
+                "{}",
+                "{}",
+            ),
+        )
+        store.connection.commit()
+        with pytest.raises(StorageError, match="RUNNING"):
+            store.update_agent_manifest("running-run", {"run_id": "running-run"})

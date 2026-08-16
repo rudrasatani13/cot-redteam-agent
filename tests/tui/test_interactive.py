@@ -404,3 +404,27 @@ def test_event_timestamp_used_for_run_started() -> None:
     app._event_queue.put_nowait(None)
     asyncio.run(app._consume_events())
     assert app.state.started_at == ts
+
+
+def test_apply_session_to_config_honors_explicit_attack() -> None:
+    """Regression: a /attack choice must win over the effort-derived
+    default; previously the effort mapping overwrote the user's selection."""
+    app = _make_app()
+    app.state.attack_id = "custom_attack"
+    app.state.attack_explicit = True
+    cfg = app._apply_session_to_config()
+    assert cfg.evaluation.attacks == ["custom_attack"]
+
+
+def test_attack_command_marks_explicit_and_applies() -> None:
+    """The /attack command path marks the selection explicit so the run
+    config keeps it (regression: selection was silently discarded)."""
+    app = _make_app()
+
+    async def _drive() -> None:
+        await app._handle_command("/attack custom_attack")
+
+    asyncio.run(_drive())
+    assert app.state.attack_explicit is True
+    cfg = app._apply_session_to_config()
+    assert cfg.evaluation.attacks == ["custom_attack"]

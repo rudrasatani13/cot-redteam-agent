@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
@@ -60,11 +61,13 @@ from cot_redteam.core.types import (
 )
 from cot_redteam.eval.manifest import validate_agent_manifest
 
+logger = logging.getLogger(__name__)
+
 MIGRATIONS: list[tuple[int, str]] = [
     (
         1,
         """
-        CREATE TABLE runs (
+        CREATE TABLE IF NOT EXISTS runs (
             run_id TEXT PRIMARY KEY,
             status TEXT NOT NULL,
             started_at TEXT NOT NULL,
@@ -76,7 +79,7 @@ MIGRATIONS: list[tuple[int, str]] = [
             metadata_json TEXT NOT NULL,
             manifest_json TEXT
         );
-        CREATE TABLE evaluation_items (
+        CREATE TABLE IF NOT EXISTS evaluation_items (
             item_id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
             model TEXT NOT NULL,
@@ -90,7 +93,7 @@ MIGRATIONS: list[tuple[int, str]] = [
             started_at TEXT,
             completed_at TEXT
         );
-        CREATE TABLE monitor_outcomes (
+        CREATE TABLE IF NOT EXISTS monitor_outcomes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             item_id TEXT NOT NULL REFERENCES evaluation_items(item_id) ON DELETE CASCADE,
             monitor_id TEXT NOT NULL,
@@ -104,14 +107,14 @@ MIGRATIONS: list[tuple[int, str]] = [
     (
         2,
         """
-        CREATE TABLE benchmark_runs (
+        CREATE TABLE IF NOT EXISTS benchmark_runs (
             run_id TEXT PRIMARY KEY,
             started_at TEXT NOT NULL,
             completed_at TEXT NOT NULL,
             metadata_json TEXT NOT NULL,
             manifest_json TEXT NOT NULL
         );
-        CREATE TABLE benchmark_trials (
+        CREATE TABLE IF NOT EXISTS benchmark_trials (
             trial_id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL REFERENCES benchmark_runs(run_id) ON DELETE CASCADE,
             model TEXT NOT NULL,
@@ -129,7 +132,7 @@ MIGRATIONS: list[tuple[int, str]] = [
             error TEXT,
             canary_metadata_json TEXT NOT NULL
         );
-        CREATE TABLE benchmark_messages (
+        CREATE TABLE IF NOT EXISTS benchmark_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trial_id TEXT NOT NULL REFERENCES benchmark_trials(trial_id) ON DELETE CASCADE,
             message_index INTEGER NOT NULL,
@@ -141,7 +144,7 @@ MIGRATIONS: list[tuple[int, str]] = [
             metadata_json TEXT NOT NULL,
             UNIQUE(trial_id, message_index)
         );
-        CREATE TABLE benchmark_turns (
+        CREATE TABLE IF NOT EXISTS benchmark_turns (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trial_id TEXT NOT NULL REFERENCES benchmark_trials(trial_id) ON DELETE CASCADE,
             turn_index INTEGER NOT NULL,
@@ -150,14 +153,14 @@ MIGRATIONS: list[tuple[int, str]] = [
             error TEXT,
             UNIQUE(trial_id, turn_index)
         );
-        CREATE TABLE benchmark_scorer_outcomes (
+        CREATE TABLE IF NOT EXISTS benchmark_scorer_outcomes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trial_id TEXT NOT NULL REFERENCES benchmark_trials(trial_id) ON DELETE CASCADE,
             outcome_index INTEGER NOT NULL,
             outcome_json TEXT NOT NULL,
             UNIQUE(trial_id, outcome_index)
         );
-        CREATE TABLE benchmark_judge_calls (
+        CREATE TABLE IF NOT EXISTS benchmark_judge_calls (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             trial_id TEXT NOT NULL REFERENCES benchmark_trials(trial_id) ON DELETE CASCADE,
             judge_index INTEGER NOT NULL,
@@ -171,7 +174,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (
         3,
         """
-        CREATE TABLE agent_runs (
+        CREATE TABLE IF NOT EXISTS agent_runs (
             run_id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
             schema_version INTEGER NOT NULL,
@@ -195,7 +198,7 @@ MIGRATIONS: list[tuple[int, str]] = [
             manifest_json TEXT,
             error TEXT
         );
-        CREATE TABLE agent_trajectory_events (
+        CREATE TABLE IF NOT EXISTS agent_trajectory_events (
             run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
             sequence_no INTEGER NOT NULL,
             event_id TEXT NOT NULL,
@@ -208,7 +211,7 @@ MIGRATIONS: list[tuple[int, str]] = [
             PRIMARY KEY(run_id, sequence_no),
             UNIQUE(run_id, event_id)
         );
-        CREATE TABLE agent_oracle_results (
+        CREATE TABLE IF NOT EXISTS agent_oracle_results (
             run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
             oracle_id TEXT NOT NULL,
             oracle_version TEXT NOT NULL,
@@ -216,7 +219,7 @@ MIGRATIONS: list[tuple[int, str]] = [
             result_json TEXT NOT NULL,
             PRIMARY KEY(run_id, oracle_id, oracle_version)
         );
-        CREATE TABLE agent_findings (
+        CREATE TABLE IF NOT EXISTS agent_findings (
             finding_id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
             oracle_id TEXT NOT NULL,
@@ -224,7 +227,7 @@ MIGRATIONS: list[tuple[int, str]] = [
             severity TEXT NOT NULL,
             finding_json TEXT NOT NULL
         );
-        CREATE TABLE replay_artifacts (
+        CREATE TABLE IF NOT EXISTS replay_artifacts (
             replay_id TEXT PRIMARY KEY,
             original_run_id TEXT NOT NULL,
             schema_version INTEGER NOT NULL,
@@ -279,6 +282,16 @@ def _wrap_sqlite_failure(exc: sqlite3.IntegrityError | sqlite3.OperationalError)
     return StorageError(f"sqlite operational failure: {exc}")
 
 
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split a migration script into individual statements.
+
+    ``executescript`` cannot be used inside an explicit transaction (it
+    implicitly commits first), so migrations execute statement-by-statement.
+    Migration SQL in this module is plain DDL with no embedded semicolons.
+    """
+    return [statement.strip() for statement in sql.split(";") if statement.strip()]
+
+
 class SQLiteRunStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -314,9 +327,8 @@ class SQLiteRunStore:
             # unusable here; statements run individually instead.
             conn.execute("BEGIN IMMEDIATE")
             try:
-                for statement in (part.strip() for part in sql.split(";")):
-                    if statement:
-                        conn.execute(statement)
+                for statement in _split_sql_statements(sql):
+                    conn.execute(statement)
                 conn.execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (version, datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")),
@@ -1104,6 +1116,12 @@ class SQLiteRunStore:
         storage boundary before any persistence (defense in depth).  The
         final run row and all evidence tables commit atomically, and only a
         RUNNING row may transition to a terminal result.
+
+        Finalization is idempotent for rows that already reached a terminal
+        state (e.g. marked INTERRUPTED by a concurrent
+        ``recover_incomplete_agent_runs()`` while the scenario was still
+        finalizing): the status/outcome update is skipped with a warning
+        instead of raising.  A missing row is still an error.
         """
         sanitizer = AgentSanitizer(retention)
         run = sanitizer.sanitize_run(run)
@@ -1128,10 +1146,18 @@ class SQLiteRunStore:
             if row is None:
                 raise StorageError(f"agent run {run.run_id!r} does not exist")
             if row["status"] != AgentRunStatus.RUNNING.value:
-                raise StorageError(
-                    f"agent run {run.run_id!r} is already {row['status']!r}; "
-                    "only RUNNING rows may be finalized"
+                # A concurrent recover_incomplete_agent_runs() can mark the
+                # row INTERRUPTED while the scenario is still finalizing.
+                # The row has already reached a terminal state, so skip the
+                # status/outcome update instead of raising (finalize is
+                # idempotent for terminal rows).
+                logger.warning(
+                    "agent run %r is already %r; skipping finalization status/outcome update",
+                    run.run_id,
+                    row["status"],
                 )
+                conn.rollback()
+                return
 
             stored_refs = {
                 "session_id": row["session_id"],
@@ -1241,7 +1267,17 @@ class SQLiteRunStore:
                 ),
             )
             if cursor.rowcount != 1:
-                raise StorageError(f"agent run {run.run_id!r} changed state before finalization")
+                # The row changed state between the SELECT and the guarded
+                # UPDATE (concurrent recovery marked it INTERRUPTED).  The
+                # row reached a terminal state on its own; skip the
+                # status/outcome update rather than raising.
+                logger.warning(
+                    "agent run %r changed state before finalization; "
+                    "skipping finalization status/outcome update",
+                    run.run_id,
+                )
+                conn.rollback()
+                return
             # These methods detect the outer transaction and deliberately do
             # not commit independently.  Any failure rolls back status,
             # oracle rows, and finding rows together below.
