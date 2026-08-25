@@ -36,9 +36,7 @@ def test_mock_demo_config_matches_readme_and_validates() -> None:
     demo_text = demo.read_text(encoding="utf-8")
     readme = README.read_text(encoding="utf-8")
     # The 30-second README demo must stay in sync with the packaged file.
-    body_lines = [
-        line for line in demo_text.splitlines() if not line.lstrip().startswith("#")
-    ]
+    body_lines = [line for line in demo_text.splitlines() if not line.lstrip().startswith("#")]
     while body_lines and not body_lines[0].strip():
         body_lines.pop(0)
     assert "\n".join(body_lines) in readme
