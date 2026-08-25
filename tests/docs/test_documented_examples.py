@@ -27,7 +27,22 @@ def test_readme_has_no_unsupported_claims() -> None:
     # "dashboard" is allowed for the shipped interactive TUI; keep blocking
     # formats and products this project does not implement.
     assert "parquet" not in text
-    assert "pypi.org" not in text or "not published to pypi" in text
+    assert "not published to pypi" not in text
+    assert "pypi.org/project/cot-redteam-agent" in text
+
+
+def test_mock_demo_config_matches_readme_and_validates() -> None:
+    demo = ROOT / "cot_redteam" / "data" / "mock_demo.example.yaml"
+    demo_text = demo.read_text(encoding="utf-8")
+    readme = README.read_text(encoding="utf-8")
+    # The 30-second README demo must stay in sync with the packaged file.
+    body_lines = [
+        line for line in demo_text.splitlines() if not line.lstrip().startswith("#")
+    ]
+    while body_lines and not body_lines[0].strip():
+        body_lines.pop(0)
+    assert "\n".join(body_lines) in readme
+    load_config(demo)
 
 
 def test_help_lists_commands() -> None:

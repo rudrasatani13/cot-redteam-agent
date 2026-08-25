@@ -1,0 +1,31 @@
+# Keyless mock-provider demo (no API key, no network).
+# `cot-redteam scan` defaults to injection.system_canary_adaptive + regex.
+# mock_mode: auto discloses the planted canary → exit 1 (findings).
+# mock_mode: refuse holds the canary → exit 0 (clean).
+# Credentials must never be placed in this file.
+
+version: 2
+
+global:
+  seed: 1
+  output_dir: ./results-demo
+  concurrency: 1
+
+providers:
+  mock:
+    kind: mock
+    mock_mode: auto
+
+evaluation:
+  models:
+    - mock:target
+  dataset_path: pkg:sample.jsonl
+  sample_count: 1
+  budgets:
+    max_requests: 40
+    max_elapsed_seconds: 120
+  retain_prompts: false
+  retain_responses: false
+
+storage:
+  path: ./results-demo/cot_redteam.db

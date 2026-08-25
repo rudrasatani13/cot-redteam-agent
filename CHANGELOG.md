@@ -5,6 +5,16 @@
 Security- and correctness-focused hardening pass over the full audit of the
 0.6.0 codebase. All gates green: 749 tests, ruff, ruff format, mypy.
 
+### Documentation
+
+- README above-the-fold rewrite: one-line scoring hook, PyPI badge, keyless
+  30-second `mock` scan demo, and an honest comparison table vs garak,
+  PyRIT, and promptfoo. Packaged demo config:
+  `cot_redteam/data/mock_demo.example.yaml`.
+- Social-preview guidance for the existing TUI screenshot in
+  `docs/assets/README.md`.
+- CONTRIBUTING now points newcomers at `good first issue` / `help wanted`.
+
 ### Changed
 
 - **OWASP tags migrated to the GenAI LLM Top 10 (2026)** (published

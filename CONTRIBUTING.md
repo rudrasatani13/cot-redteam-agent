@@ -9,6 +9,19 @@ Usage questions belong in the support channels described in
 [SUPPORT.md](SUPPORT.md). Do not disclose vulnerabilities in public issues or
 pull requests; follow [SECURITY.md](SECURITY.md).
 
+## Good first issues
+
+New contributors should start with issues labeled
+[`good first issue`](https://github.com/rudrasatani13/cot-redteam-agent/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+or
+[`help wanted`](https://github.com/rudrasatani13/cot-redteam-agent/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
+
+Prefer documentation, example configs, and catalog work unless you already
+know the evaluation engine. Search existing issues first. Keep changes
+focused, stay offline in tests, and never include API keys or generated
+artifacts. Suspected vulnerabilities stay private per
+[SECURITY.md](SECURITY.md).
+
 ## Before opening a change
 
 - Search existing issues and pull requests.
