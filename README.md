@@ -436,6 +436,7 @@ poisoned by aborts.
 | Guide | Purpose |
 |---|---|
 | [Configuration](docs/configuration.md) | Schema, credentials, precedence, and validation |
+| [Attack catalog](docs/attacks.md) | Registered attacks, families, and selection guidance |
 | [Interactive TUI](docs/tui.md) | Adaptive dashboard, slash commands, screenshot |
 | [Providers](docs/providers.md) | Provider-specific behavior and endpoints |
 | [Plugins](docs/plugins.md) | Attack and monitor extension contracts |
