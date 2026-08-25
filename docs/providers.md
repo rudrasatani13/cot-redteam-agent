@@ -60,3 +60,24 @@ Benchmark requests preserve ordered role messages. A provider capability must
 be declared only when its route can represent that role faithfully. Anthropic
 rejects unsupported developer, tool, or named-message forms before a request;
 OpenAI-compatible routes serialize supported roles without silent adaptation.
+
+## Local llama.cpp
+
+The `llamacpp` provider uses a local OpenAI-compatible llama.cpp server and
+does not require an API key. Start the server before running an evaluation.
+
+A minimal configuration is available at
+`cot_redteam/data/llamacpp.example.yaml`. Replace `<model-id>` with the model
+ID exposed by the local server.
+
+```yaml
+providers:
+  llamacpp:
+    kind: llamacpp
+    base_url: http://localhost:8080/v1
+
+evaluation:
+  models:
+    - llamacpp:<model-id>
+```
+Do not commit secrets or downloaded model binaries.
