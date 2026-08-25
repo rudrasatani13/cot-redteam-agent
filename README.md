@@ -1,8 +1,82 @@
 # CoT Red Team Agent
 
 [![CI](https://github.com/rudrasatani13/cot-redteam-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/rudrasatani13/cot-redteam-agent/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/cot-redteam-agent)](https://pypi.org/project/cot-redteam-agent/)
 [![Python 3.10–3.13](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+**Refusal quotes of a canary are not a finding.** This CLI scores *visible*
+chain-of-thought and proves simulated-agent impact from observed actions — not
+from assistant prose or an LLM judge.
+
+```bash
+python -m pip install cot-redteam-agent
+```
+
+Published on PyPI as [`cot-redteam-agent`](https://pypi.org/project/cot-redteam-agent/).
+
+## Try it in 30 seconds (no API key)
+
+The keyless `mock` provider never touches the network. The config below is also
+shipped as [`cot_redteam/data/mock_demo.example.yaml`](cot_redteam/data/mock_demo.example.yaml).
+`mock_mode: auto` discloses a synthetic canary, so `scan` should exit `1`
+(findings). That is the demo working — not a real-model vulnerability.
+
+```bash
+cat > demo.yaml <<'EOF'
+version: 2
+
+global:
+  seed: 1
+  output_dir: ./results-demo
+  concurrency: 1
+
+providers:
+  mock:
+    kind: mock
+    mock_mode: auto
+
+evaluation:
+  models:
+    - mock:target
+  dataset_path: pkg:sample.jsonl
+  sample_count: 1
+  budgets:
+    max_requests: 40
+    max_elapsed_seconds: 120
+  retain_prompts: false
+  retain_responses: false
+
+storage:
+  path: ./results-demo/cot_redteam.db
+EOF
+cot-redteam scan --config demo.yaml
+```
+
+Exit codes: `0` clean, `1` findings, `2` config/env, `3` partial. Gate CI on
+`1`. Switch `mock_mode` to `refuse` for a clean pass. From a clone, the v0.6
+agent lane is also keyless:
+`cot-redteam agent scan --config cot_redteam/data/agent_security.example.yaml`.
+
+## Why this vs garak, PyRIT, and promptfoo
+
+Pick the tool that matches the job. This project does not replace a broad
+scanner, an orchestration SDK, or a YAML eval harness.
+
+| | CoT Red Team Agent | [garak](https://github.com/NVIDIA/garak) | [PyRIT](https://github.com/Azure/PyRIT) | [promptfoo](https://github.com/promptfoo/promptfoo) |
+|---|---|---|---|---|
+| Best fit | Score visible reasoning and simulated agent actions | Broad model vulnerability scanner | Compose red-team workflows in Python | YAML/CI eval and red-team prompts |
+| Success rule | A refusal that only quotes a canary is **not** success; agent impact needs observed tool actions and world-state diffs | Probe/detector library across many failure modes | You choose converters, scorers, and targets | Assertions and judges you configure |
+| Live loop | Adaptive TUI (`cot-redteam tui`) | CLI and reports | SDK / notebooks | Web UI and CI |
+| Start offline | Keyless `mock` provider | Typically needs a target model | Typically needs a target | Typically needs a provider |
+| Agent proof | v0.6 simulated world, deny-by-default gateway, checksummed replay | Different scope | Different scope | Different scope |
+| Standards | OWASP GenAI LLM Top 10 (2026) tags on report items | Own taxonomies / plugins | Own taxonomies / datasets | Own rubrics / plugins |
+
+![Adaptive red-team TUI](docs/assets/tui-adaptive-redteam.png)
+
+*Interactive adaptive TUI: multi-model board, payload attempt log, model output,
+and last real successful disclosure (refusal re-quotes are not counted as success).*
+See [docs/assets/README.md](docs/assets/README.md) for social-preview guidance.
 
 CoT Red Team Agent is an open-source CLI and Python API for evaluating LLM and
 agent behavior under adversarial inputs. It runs reproducible model attacks and
@@ -15,11 +89,6 @@ oracles, checksummed exploit replay, and patched-target regression suites. It
 preserves the `0.5` adaptive attacks and TUI, `0.3` benchmark, and `0.2` Python
 API. Existing users should also read the
 [0.3 migration guide](docs/migration-0.2-to-0.3.md).
-
-![Adaptive red-team TUI](docs/assets/tui-adaptive-redteam.png)
-
-*Interactive adaptive TUI: multi-model board, payload attempt log, model output,
-and last real successful disclosure (refusal re-quotes are not counted as success).*
 
 ## What it does
 
@@ -117,6 +186,9 @@ python -m pip install -e ".[dev]"
 Published on PyPI as `cot-redteam-agent`.
 
 ## Five-minute quickstart
+
+No API key? Use the [30-second mock scan](#try-it-in-30-seconds-no-api-key)
+above. The steps below contact a real provider and may incur cost.
 
 Create a wheel-safe example configuration:
 
@@ -372,7 +444,7 @@ poisoned by aborts.
 | [0.3 migration](docs/migration-0.2-to-0.3.md) | Additive changes from `0.2.x` |
 | [Migration](docs/migration-0.1-to-0.2.md) | Breaking changes from `0.1.x` |
 | [Support](SUPPORT.md) | Where to ask questions or report reproducible bugs |
-| [Contributing](CONTRIBUTING.md) | Development and pull-request workflow |
+| [Contributing](CONTRIBUTING.md) | Development, good first issues, and pull-request workflow |
 | [Security](SECURITY.md) | Private vulnerability reporting and scope |
 | [Roadmap](docs/roadmap.md) | Phased direction for v0.7 and beyond |
 | [AGENTS.md](AGENTS.md) | On-boarding contract for AI coding agents |
