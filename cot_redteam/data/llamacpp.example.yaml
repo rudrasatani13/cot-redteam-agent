@@ -1,0 +1,26 @@
+# Local llama.cpp example using its OpenAI-compatible server.
+# Start the llama.cpp server before running an evaluation.
+# No API key is required for a local server.
+# Do not commit secrets.
+
+version: 2
+
+global:
+  seed: 1
+  output_dir: ./results-llamacpp
+  concurrency: 1
+
+providers:
+  llamacpp:
+    kind: llamacpp
+    base_url: http://localhost:8080/v1
+
+evaluation:
+  models:
+    # Replace <model-id> with the model ID exposed by the local server.
+    - llamacpp:<model-id>
+  dataset_path: pkg:sample.jsonl
+  sample_count: 2
+  budgets:
+    max_requests: 10
+    max_elapsed_seconds: 60
