@@ -109,6 +109,26 @@ def test_scan_registered_in_cli() -> None:
     assert "--model" in proc.stdout
 
 
+def test_scan_packaged_refuse_and_disclose_demos(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    data = Path(__file__).resolve().parents[2] / "cot_redteam" / "data"
+    refuse = tmp_path / "refuse.yaml"
+    disclose = tmp_path / "disclose.yaml"
+    refuse.write_text(
+        (data / "mock_refuse.example.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    disclose.write_text(
+        (data / "mock_disclose.example.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    assert cmd_scan(_Args(config=str(refuse))) == 0
+    assert "VERDICT: no findings" in capsys.readouterr().out
+    assert cmd_scan(_Args(config=str(disclose))) == 1
+    assert "finding" in capsys.readouterr().out
+
+
 def test_scan_failed_run_exits_partial(
     tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch
 ) -> None:

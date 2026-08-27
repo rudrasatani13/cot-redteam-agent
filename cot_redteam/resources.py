@@ -12,17 +12,32 @@ from cot_redteam.core.errors import ConfigurationError
 PACKAGE_DATASET_MARKER = "pkg:sample.jsonl"
 EXAMPLE_CONFIG_RESOURCE = "config.example.yaml"
 SAMPLE_DATASET_RESOURCE = "sample.jsonl"
+MOCK_DEMO_CONFIG_RESOURCE = "mock_demo.example.yaml"
+
+
+def read_packaged_data_text(name: str) -> str:
+    """Return a packaged ``cot_redteam.data`` file as text.
+
+    ``name`` must be a bare filename; path separators are rejected so callers
+    cannot escape the package directory.
+    """
+    if "/" in name or "\\" in name or name.startswith(".."):
+        raise ConfigurationError(f"invalid packaged data name: {name!r}")
+    try:
+        root = importlib.resources.files("cot_redteam.data")
+        return root.joinpath(name).read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError, TypeError, OSError) as exc:
+        raise ConfigurationError(f"packaged data file not found ({name}): {exc}") from exc
 
 
 def read_example_config_text() -> str:
-    """Return the packaged example configuration as text."""
-    try:
-        root = importlib.resources.files("cot_redteam.data")
-        return root.joinpath(EXAMPLE_CONFIG_RESOURCE).read_text(encoding="utf-8")
-    except (FileNotFoundError, ModuleNotFoundError, TypeError, OSError) as exc:
-        raise ConfigurationError(
-            f"packaged example config not found ({EXAMPLE_CONFIG_RESOURCE}): {exc}"
-        ) from exc
+    """Return the packaged OpenRouter-first example configuration as text."""
+    return read_packaged_data_text(EXAMPLE_CONFIG_RESOURCE)
+
+
+def read_mock_demo_config_text() -> str:
+    """Return the packaged keyless mock demo configuration as text."""
+    return read_packaged_data_text(MOCK_DEMO_CONFIG_RESOURCE)
 
 
 @contextmanager

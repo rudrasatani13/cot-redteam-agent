@@ -1,4 +1,4 @@
-# Configuration reference (0.3)
+# Configuration reference (0.6)
 
 Configuration is a YAML document with `version: 2`. Unknown keys fail validation.
 

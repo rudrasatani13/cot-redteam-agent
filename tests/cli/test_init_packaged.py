@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from cot_redteam.cli.main import main
 from cot_redteam.core.config import load_config
+from cot_redteam.core.errors import ConfigurationError
 from cot_redteam.eval.dataset import Dataset
-from cot_redteam.resources import read_example_config_text
+from cot_redteam.resources import (
+    read_example_config_text,
+    read_mock_demo_config_text,
+    read_packaged_data_text,
+)
 
 
 def test_packaged_example_config_readable() -> None:
@@ -39,3 +46,52 @@ def test_load_config_with_packaged_dataset(tmp_path: Path, monkeypatch) -> None:
     assert config.evaluation.attacks == ["injection.system_canary_agent"]
     assert "injection.system_canary_agent" in config.evaluation.attack_config
     Dataset.load_jsonl(config.evaluation.dataset_path)
+
+
+def test_init_demo_mock_writes_keyless_demo(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    dest = tmp_path / "demo.yaml"
+    assert main(["init", "--path", str(dest), "--demo", "mock"]) == 0
+    text = dest.read_text(encoding="utf-8")
+    assert text == read_mock_demo_config_text()
+    assert "mock_mode: auto" in text
+    config = load_config(dest)
+    assert config.evaluation.models == ["mock:target"]
+    assert config.providers["mock"].kind == "mock"
+
+
+def test_init_without_demo_still_writes_openrouter_example(tmp_path: Path) -> None:
+    dest = tmp_path / "config.yaml"
+    assert main(["init", "--path", str(dest)]) == 0
+    text = dest.read_text(encoding="utf-8")
+    assert text == read_example_config_text()
+    assert "kind: openrouter" in text
+
+
+def test_init_demo_mock_refuses_overwrite(tmp_path: Path) -> None:
+    dest = tmp_path / "demo.yaml"
+    dest.write_text("existing\n", encoding="utf-8")
+    assert main(["init", "--path", str(dest), "--demo", "mock"]) == 2
+    assert dest.read_text(encoding="utf-8") == "existing\n"
+    assert main(["init", "--path", str(dest), "--demo", "mock", "--force"]) == 0
+    assert dest.read_text(encoding="utf-8") == read_mock_demo_config_text()
+
+
+def test_init_help_lists_demo_flag() -> None:
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "cot_redteam.cli.main", "init", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    assert "--demo" in proc.stdout
+    assert "mock" in proc.stdout
+
+
+def test_packaged_data_rejects_path_escape() -> None:
+    with pytest.raises(ConfigurationError, match="invalid packaged data name"):
+        read_packaged_data_text("../config.example.yaml")

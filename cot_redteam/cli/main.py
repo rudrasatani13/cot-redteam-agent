@@ -32,7 +32,7 @@ from cot_redteam.reporting.benchmark import (
 )
 from cot_redteam.reporting.report import ReportFormat, ReportWriter
 from cot_redteam.reporting.sarif import render_sarif
-from cot_redteam.resources import read_example_config_text
+from cot_redteam.resources import read_example_config_text, read_mock_demo_config_text
 from cot_redteam.storage.sqlite import SQLiteRunStore
 
 EXIT_OK = 0
@@ -53,6 +53,12 @@ def _build_parser() -> argparse.ArgumentParser:
     init_p = sub.add_parser("init", help="write example configuration")
     init_p.add_argument("--path", default="config.yaml", help="destination path")
     init_p.add_argument("--force", action="store_true", help="overwrite existing file")
+    init_p.add_argument(
+        "--demo",
+        choices=["mock"],
+        default=None,
+        help="write a packaged keyless demo (mock) instead of the OpenRouter example",
+    )
 
     cfg = sub.add_parser("config", help="configuration utilities")
     cfg_sub = cfg.add_subparsers(dest="config_command", required=True)
@@ -204,7 +210,10 @@ def cmd_init(args: argparse.Namespace) -> int:
     if dest.exists() and not args.force:
         print(f"refusing to overwrite existing file: {dest}", file=sys.stderr)
         return EXIT_CONFIG
-    text = read_example_config_text()
+    if args.demo == "mock":
+        text = read_mock_demo_config_text()
+    else:
+        text = read_example_config_text()
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(text, encoding="utf-8")
     print(f"wrote {dest}")
