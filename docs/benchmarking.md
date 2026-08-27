@@ -1,7 +1,8 @@
 # Prompt-Injection Benchmarking
 
-Version 0.3 evaluates raw text model and chat-completion APIs. It does not
-operate browsers, email, external tools, RAG systems, or production agents.
+The packaged prompt-injection benchmark evaluates raw text model and
+chat-completion APIs. It does not operate browsers, email, external tools, RAG
+systems, or production agents.
 
 ## Suites and trial matrix
 

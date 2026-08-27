@@ -54,8 +54,12 @@ cot-redteam scan --config demo.yaml
 ```
 
 Exit codes: `0` clean, `1` findings, `2` config/env, `3` partial. Gate CI on
-`1`. Switch `mock_mode` to `refuse` for a clean pass. From a clone, the v0.6
-agent lane is also keyless:
+`1`. Switch `mock_mode` to `refuse` for a clean pass — packaged variants
+[`mock_refuse.example.yaml`](cot_redteam/data/mock_refuse.example.yaml) and
+[`mock_disclose.example.yaml`](cot_redteam/data/mock_disclose.example.yaml)
+sit next to the auto demo. `cot-redteam init --demo mock` writes this keyless
+config instead of the OpenRouter example. From a clone, the v0.6 agent lane is
+also keyless:
 `cot-redteam agent scan --config cot_redteam/data/agent_security.example.yaml`.
 
 ## Why this vs garak, PyRIT, and promptfoo
@@ -71,6 +75,9 @@ scanner, an orchestration SDK, or a YAML eval harness.
 | Start offline | Keyless `mock` provider | Typically needs a target model | Typically needs a target | Typically needs a provider |
 | Agent proof | v0.6 simulated world, deny-by-default gateway, checksummed replay | Different scope | Different scope | Different scope |
 | Standards | OWASP GenAI LLM Top 10 (2026) tags on report items | Own taxonomies / plugins | Own taxonomies / datasets | Own rubrics / plugins |
+
+See also [docs/comparisons.md](docs/comparisons.md) for overlap, honest
+non-goals, and what each project's own README says it is.
 
 ![Adaptive red-team TUI](docs/assets/tui-adaptive-redteam.png)
 
@@ -195,6 +202,8 @@ Create a wheel-safe example configuration:
 ```bash
 # test: command
 cot-redteam init --path config.yaml
+# Keyless mock demo instead of the OpenRouter example:
+# cot-redteam init --path demo.yaml --demo mock
 # Edit evaluation.models and generative model IDs for your provider route.
 export OPENROUTER_API_KEY=your-key
 cot-redteam config validate --config config.yaml
@@ -410,7 +419,7 @@ Use `run_evaluation` for the backward-compatible `0.2` attack/monitor path and
 
 ## CLI reference
 
-- `cot-redteam init`
+- `cot-redteam init` — `--demo mock` writes the keyless mock demo
 - `cot-redteam config validate|show`
 - `cot-redteam list-attacks|list-monitors|list-providers`
 - `cot-redteam list-suites`
@@ -442,6 +451,8 @@ poisoned by aborts.
 | [Plugins](docs/plugins.md) | Attack and monitor extension contracts |
 | [Experiments](docs/experiments.md) | Metrics, rates, comparisons, and retention |
 | [Benchmarking](docs/benchmarking.md) | Suites, capabilities, scoring, reports, and imports |
+| [Comparisons](docs/comparisons.md) | vs garak, PyRIT, and promptfoo (honest non-goals) |
+| [Consumer CI scan](docs/ci-scan.md) | Copy-paste GitHub Actions job for `cot-redteam scan` |
 | [0.3 migration](docs/migration-0.2-to-0.3.md) | Additive changes from `0.2.x` |
 | [Migration](docs/migration-0.1-to-0.2.md) | Breaking changes from `0.1.x` |
 | [Support](SUPPORT.md) | Where to ask questions or report reproducible bugs |

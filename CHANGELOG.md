@@ -14,6 +14,18 @@ Security- and correctness-focused hardening pass over the full audit of the
 - Social-preview guidance for the existing TUI screenshot in
   `docs/assets/README.md`.
 - CONTRIBUTING now points newcomers at `good first issue` / `help wanted`.
+- Docs version-string pass: contributor and current-docs headings now match
+  `0.6.x` (`CONTRIBUTING.md`, `docs/configuration.md`, root
+  `config.example.yaml`). Historical specs, plans, and `docs/migration-*.md`
+  are unchanged.
+- Packaged mock-provider variants
+  `cot_redteam/data/mock_refuse.example.yaml` (expected `scan` exit 0) and
+  `mock_disclose.example.yaml` (expected exit 1). `cot-redteam init --demo mock`
+  writes the keyless auto demo; default `init` is unchanged.
+- `docs/comparisons.md` expands the README vs garak / PyRIT / promptfoo
+  table without claiming to replace those tools.
+- `docs/ci-scan.md` documents a consumer GitHub Actions snippet for
+  `cot-redteam scan` (keyless mock refuse + SARIF; secrets stay in env vars).
 
 ### Changed
 
