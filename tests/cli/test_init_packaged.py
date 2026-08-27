@@ -95,4 +95,3 @@ def test_init_help_lists_demo_flag() -> None:
 def test_packaged_data_rejects_path_escape() -> None:
     with pytest.raises(ConfigurationError, match="invalid packaged data name"):
         read_packaged_data_text("../config.example.yaml")
-
